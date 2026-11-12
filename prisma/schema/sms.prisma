@@ -1,0 +1,118 @@
+// SMS reseller / credit-wallet feature (built on the MRAM gateway).
+// The platform buys bulk SMS from MRAM; owners buy credit packages here and
+// spend credits when they send SMS to their contacts.
+
+// Sellable credit packs the super admin configures (e.g. "500 SMS - 400 Tk").
+model SmsPackage {
+  id         String   @id @default(uuid())
+  name       String
+  sms_count  Int
+  price      Decimal  @default(0) @db.Decimal(15, 2)
+  active     Boolean  @default(true)
+  created_at DateTime @default(now())
+
+  @@map("sms_packages")
+}
+
+// One credit wallet per owner. `balance` is the number of SMS credits left.
+model SmsWallet {
+  id         String   @id @default(uuid())
+  owner_id   String   @unique
+  balance    Int      @default(0)
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  owner User @relation(fields: [owner_id], references: [id], onDelete: Cascade)
+
+  @@map("sms_wallets")
+}
+
+// A manual bKash purchase of a credit pack. On approval the wallet is topped up.
+model SmsPurchase {
+  id            String   @id @default(uuid())
+  // Nullable for the same reason as subscription_payments: the money stays
+  // on the books after the customer is gone.
+  owner_id      String?
+  package_id    String?
+  package_name  String   @default("")
+  sms_count     Int
+  amount        Decimal  @default(0) @db.Decimal(15, 2)
+  status        String   @default("pending") // pending | paid | rejected
+  method        String   @default("bkash_manual")
+  sender_number String   @default("")
+  trx_id        String   @default("")
+  invoice_no    String   @default("")
+  notes         String   @default("")
+  date          DateTime @default(now())
+  created_at    DateTime @default(now())
+
+  owner User? @relation(fields: [owner_id], references: [id], onDelete: SetNull)
+
+  @@index([owner_id])
+  @@map("sms_purchases")
+}
+
+// Log of every SMS batch an owner sent through the gateway.
+model SmsMessage {
+  id              String   @id @default(uuid())
+  owner_id        String
+  recipient_count Int      @default(0)
+  segments        Int      @default(1)
+  credits_used    Int      @default(0)
+  message         String   @db.Text
+  is_unicode      Boolean  @default(false)
+  status          String   @default("sent") // sent | failed
+  shoot_id        String   @default("")
+  response        String   @default("") @db.Text
+  created_at      DateTime @default(now())
+
+  owner User @relation(fields: [owner_id], references: [id], onDelete: Cascade)
+
+  @@index([owner_id])
+  @@map("sms_messages")
+}
+
+// Phone numbers the owner types in by hand on the Marketing page - people who
+// are not customers, suppliers or employees, but should still receive
+// campaigns. Shown in the composer under "Contact list".
+model MarketingContact {
+  id         String   @id @default(uuid())
+  owner_id   String
+  name       String   @default("")
+  phone      String   @default("")
+  note       String   @default("")
+  created_at DateTime @default(now())
+
+  owner User @relation(fields: [owner_id], references: [id], onDelete: Cascade)
+
+  @@index([owner_id])
+  @@map("marketing_contacts")
+}
+
+// A prospect nobody has sold to yet: a shop or office that might buy, noted
+// down after a visit or a phone call. Kept apart from MarketingContact, which
+// is only ever a name and a number - a lead carries who they are and where
+// they are, because that is what makes a follow-up possible weeks later.
+//
+// Leads are a recipient type on the Marketing page like the other four, so a
+// campaign can go to prospects without them being pretended into customers.
+model Lead {
+  id           String   @id @default(uuid())
+  owner_id     String
+  date         DateTime @default(now()) @db.Date
+  organization String
+  designation  String   @default("")
+  name         String
+  phone        String
+  address      String   @default("")
+  notes        String   @default("")
+  created_by   String?
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  owner User @relation(fields: [owner_id], references: [id], onDelete: Cascade)
+
+  @@index([owner_id])
+  @@index([owner_id, date(sort: Desc)])
+  @@map("leads")
+}

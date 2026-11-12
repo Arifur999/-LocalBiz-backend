@@ -1,0 +1,48 @@
+name: CI
+
+# Quality gate: runs on every push to main and on every pull request into
+# main. A red check here means don't merge - it catches type errors,
+# lint errors, and (via the Docker build step) a broken Dockerfile before any
+# of that reaches the server.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      # --legacy-peer-deps: multer-storage-cloudinary@4 peers on cloudinary@^1.21,
+      # this project uses cloudinary@2.x.
+      - run: npm ci --legacy-peer-deps
+
+      # The Prisma client is generated TypeScript source (src/generated/prisma) -
+      # tsc needs it to exist before it can type-check anything that imports it.
+      - run: npx prisma generate
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npx eslint . --ext .ts
+
+      # listQuery.test.ts pins down the server half of what a search means -
+      # a literal contains with LIKE's wildcards escaped - so it keeps
+      # agreeing with the browser's rules rather than drifting into SQL's.
+      - name: Tests
+        run: npm test
+
+      - name: Build (compiles TypeScript)
+        run: npm run build
+
+      - name: Build Docker image
+        run: docker build -t localbiz-backend-ci-check .

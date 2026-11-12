@@ -1,0 +1,146 @@
+// Enum values intentionally kept lowercase to match the exact string values
+// the existing React frontend compares against (Supabase legacy data shape).
+
+enum Role {
+  super_admin
+  owner
+  manager
+  sales_staff
+  accountant
+}
+
+enum SubscriptionStatus {
+  pending
+  trial
+  active
+  expired
+  blocked
+}
+
+enum PlanType {
+  free_trial
+  monthly
+  yearly
+}
+
+enum PlanStatus {
+  active
+  expired
+  suspended
+}
+
+enum AccountType {
+  cash
+  bank
+  mfs
+  personal
+  other
+}
+
+enum ShippingStatus {
+  pending
+  partial
+  received
+}
+
+enum ReceiveCondition {
+  good
+  damaged
+  partial
+}
+
+enum InventoryChangeType {
+  purchase_in
+  sales_out
+  transfer_in
+  transfer_out
+  adjustment
+}
+
+// Damage: furniture that breaks in the showroom or arrives broken, and what
+// the shop decides to do with it. Kept beside ShippingStatus because the
+// module is shaped like Purchase - an entry, then receives against it.
+enum DamageSource {
+  own_stock
+  supplier
+}
+
+enum DamageAction {
+  repair
+  return
+  exchange
+}
+
+enum DamageStatus {
+  pending
+  partial
+  completed
+}
+
+// What came back. `scrapped` is the one that returns no stock: the piece was
+// beyond saving, so the goods are gone for good.
+enum DamageReceiveResult {
+  repaired
+  replaced
+  scrapped
+}
+
+enum SaleStatus {
+  draft
+  completed
+  cancelled
+}
+
+enum DeliveryStatus {
+  pending
+  partial
+  delivered
+}
+
+enum LoanType {
+  bank
+  personal
+}
+
+enum LoanTransactionType {
+  receive
+  payment
+}
+
+enum LenderType {
+  bank
+  person
+  boss
+}
+
+enum IncomeType {
+  supplier
+  other
+}
+
+enum BatchSourceType {
+  opening_stock
+  purchase_receive
+  adjustment
+}
+
+enum CostLayerSourceType {
+  fifo
+  preorder
+  manual
+}
+
+enum SubPaymentStatus {
+  paid
+  pending
+  failed
+  refunded
+}
+
+// Where a support ticket stands. "open" means it is waiting on the platform -
+// either newly asked or replied to by the customer since the last answer.
+enum SupportTicketStatus {
+  open
+  answered
+  solved
+}

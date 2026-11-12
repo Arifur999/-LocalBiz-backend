@@ -1,0 +1,153 @@
+import dotenv from "dotenv";
+import { parseReviewEmails } from "../app/shared/loginOtp.js";
+
+dotenv.config();
+
+interface ENVConfig {
+    NODE_ENV: string;
+    PORT: string | number;
+    DATABASE_URL: string;
+    ACCESS_TOKEN_SECRET: string;
+    REFRESH_TOKEN_SECRET: string;
+    ACCESS_TOKEN_EXPIRES_IN: string;
+    // How long one sign-in lasts, in days. The refresh token and both auth
+    // cookies are all sized from this single number, so they cannot drift
+    // apart the way a hardcoded cookie maxAge did.
+    SESSION_DAYS: number;
+    // Email one-time-code required on every login. Defaults on; set
+    // LOGIN_OTP_ENABLED=false to fall back to password-only login if the mail
+    // provider is down and users would otherwise be locked out.
+    LOGIN_OTP_ENABLED: boolean;
+    // Accounts that sign in without the emailed code - the app stores' review
+    // logins. Comma-separated, empty by default; see shared/loginOtp.ts.
+    REVIEW_LOGIN_EMAILS: string[];
+    FRONTEND_URL: string;
+    SUPER_ADMIN_EMAIL: string;
+    SUPER_ADMIN_PASSWORD: string;
+    CLOUDINARY_CLOUD_NAME: string;
+    CLOUDINARY_API_KEY: string;
+    CLOUDINARY_API_SECRET: string;
+    // SMTP credentials for sending OTP / notification emails.
+    // Leave empty in development: OTP codes are then printed to the server
+    // console instead of being emailed, so the flow stays testable.
+    EMAIL_SENDER: {
+        SMTP_HOST: string;
+        SMTP_PORT: string;
+        SMTP_USER: string;
+        SMTP_PASS: string;
+        SMTP_FROM: string;
+    };
+    // Resend (HTTPS email API - api.resend.com). Preferred over SMTP/OAuth2
+    // in production: many hosts (Railway included) block outbound SMTP ports
+    // to fight spam, but never block outbound HTTPS, so this is the option
+    // that actually works once deployed.
+    RESEND: {
+        API_KEY: string;
+        FROM_EMAIL: string;
+    };
+    // Google OAuth2 for Gmail sending. When MAIL_USER + CLIENT_ID/SECRET +
+    // REFRESH_TOKEN are all present, this takes priority over SMTP password.
+    GOOGLE: {
+        MAIL_USER: string;
+        CLIENT_ID: string;
+        CLIENT_SECRET: string;
+        REFRESH_TOKEN: string;
+    };
+    BKASH: {
+        MODE: "sandbox" | "production";
+        BASE_URL: string;
+        APP_KEY: string;
+        APP_SECRET: string;
+        USERNAME: string;
+        PASSWORD: string;
+        CALLBACK_URL: string;
+    };
+    // MRAM SMS gateway (msg.mram.com.bd). The master API key + approved sender
+    // ID stay server-side only - owners never see them; all SMS is proxied
+    // through the backend which meters per-owner credits.
+    MRAM: {
+        API_KEY: string;
+        SENDER_ID: string;
+        BASE_URL: string;
+    };
+}
+
+const requiredEnvVars = [
+    "DATABASE_URL",
+    "ACCESS_TOKEN_SECRET",
+    "REFRESH_TOKEN_SECRET",
+    "SUPER_ADMIN_EMAIL",
+    "SUPER_ADMIN_PASSWORD",
+];
+
+requiredEnvVars.forEach((varName) => {
+    if (!process.env[varName]) {
+        throw new Error(`Environment variable ${varName} is not set`);
+    }
+});
+
+export const env: ENVConfig = {
+    NODE_ENV: process.env.NODE_ENV || "development",
+    PORT: process.env.PORT || 5100,
+    DATABASE_URL: process.env.DATABASE_URL as string,
+    ACCESS_TOKEN_SECRET: process.env.ACCESS_TOKEN_SECRET as string,
+    REFRESH_TOKEN_SECRET: process.env.REFRESH_TOKEN_SECRET as string,
+    // Short-lived on purpose: it is rotated silently by /auth/refresh-token,
+    // which the frontend calls on the first 401. What a user actually feels is
+    // SESSION_DAYS below.
+    ACCESS_TOKEN_EXPIRES_IN: process.env.ACCESS_TOKEN_EXPIRES_IN || "1d",
+    // One sign-in lasts 15 days, then a freshly emailed code is required.
+    // Absolute, not sliding: the expiry is stamped into the refresh token at
+    // login and carried unchanged through every rotation, so staying active
+    // does not push it further out.
+    SESSION_DAYS: Number(process.env.SESSION_DAYS) > 0 ? Number(process.env.SESSION_DAYS) : 15,
+    LOGIN_OTP_ENABLED: process.env.LOGIN_OTP_ENABLED !== "false",
+    REVIEW_LOGIN_EMAILS: parseReviewEmails(process.env.REVIEW_LOGIN_EMAILS),
+    FRONTEND_URL: process.env.FRONTEND_URL || "http://localhost:5174",
+    SUPER_ADMIN_EMAIL: process.env.SUPER_ADMIN_EMAIL as string,
+    SUPER_ADMIN_PASSWORD: process.env.SUPER_ADMIN_PASSWORD as string,
+    CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || "",
+    CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || "",
+    CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || "",
+    EMAIL_SENDER: {
+        SMTP_HOST: process.env.EMAIL_SENDER_SMTP_HOST || "smtp.gmail.com",
+        SMTP_PORT: process.env.EMAIL_SENDER_SMTP_PORT || "465",
+        SMTP_USER: process.env.EMAIL_SENDER_SMTP_USER || "",
+        SMTP_PASS: process.env.EMAIL_SENDER_SMTP_PASS || "",
+        SMTP_FROM: process.env.EMAIL_SENDER_SMTP_FROM || process.env.EMAIL_SENDER_SMTP_USER || "",
+    },
+    RESEND: {
+        API_KEY: process.env.RESEND_API_KEY || "",
+        FROM_EMAIL: process.env.RESEND_FROM_EMAIL || "onboarding@resend.dev",
+    },
+    GOOGLE: {
+        MAIL_USER: process.env.GOOGLE_MAIL_USER || "",
+        CLIENT_ID: process.env.GOOGLE_CLIENT_ID || "",
+        CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || "",
+        REFRESH_TOKEN: process.env.GOOGLE_REFRESH_TOKEN || "",
+    },
+    // bKash credentials resolve by mode so the payment module never has to
+    // care whether it's talking to sandbox or production.
+    BKASH: (() => {
+        const mode = process.env.BKASH_MODE === "production" ? "production" : "sandbox";
+        const prefix = mode === "production" ? "BKASH_PROD" : "BKASH_SANDBOX";
+        return {
+            MODE: mode as "sandbox" | "production",
+            BASE_URL:
+                process.env[`${prefix}_BASE_URL`] ||
+                (mode === "production"
+                    ? "https://tokenized.pay.bka.sh/v1.2.0-beta"
+                    : "https://tokenized.sandbox.bka.sh/v1.2.0-beta"),
+            APP_KEY: process.env[`${prefix}_APP_KEY`] || "",
+            APP_SECRET: process.env[`${prefix}_APP_SECRET`] || "",
+            USERNAME: process.env[`${prefix}_USERNAME`] || "",
+            PASSWORD: process.env[`${prefix}_PASSWORD`] || "",
+            CALLBACK_URL: process.env.BKASH_CALLBACK_URL || "http://localhost:5100/api/v1/payments/bkash/callback",
+        };
+    })(),
+    MRAM: {
+        API_KEY: process.env.MRAM_API_KEY || "",
+        SENDER_ID: process.env.MRAM_SENDER_ID || "",
+        BASE_URL: process.env.MRAM_BASE_URL || "https://msg.mram.com.bd",
+    },
+};

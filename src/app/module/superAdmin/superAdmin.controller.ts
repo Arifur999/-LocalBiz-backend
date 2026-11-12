@@ -1,0 +1,172 @@
+import { Request, Response } from "express";
+import status from "http-status";
+import { IRequestUser } from "../../interfaces/requestUser.interface.js";
+import catchAsync from "../../shared/catchAsync.js";
+import { sendResponse } from "../../shared/sendResponse.js";
+import { SuperAdminService } from "./superAdmin.service.js";
+
+const getAllOwners = catchAsync(async (req: Request, res: Response) => {
+    const result = await SuperAdminService.getAllOwners();
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Owners retrieved successfully",
+        data: result,
+    });
+});
+
+const updateOwnerSubscription = catchAsync(async (req: Request, res: Response) => {
+    const result = await SuperAdminService.updateOwnerSubscription(
+        req.params.ownerId as string,
+        req.body,
+        req.user as IRequestUser
+    );
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Owner subscription updated successfully",
+        data: result,
+    });
+});
+
+const grantTrialExtension = catchAsync(async (req: Request, res: Response) => {
+    const result = await SuperAdminService.grantTrialExtension(
+        req.params.ownerId as string,
+        req.user as IRequestUser
+    );
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Trial extension granted successfully",
+        data: result,
+    });
+});
+
+const deleteOwner = catchAsync(async (req: Request, res: Response) => {
+    const result = await SuperAdminService.deleteOwner(req.params.ownerId as string, req.user as IRequestUser);
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Owner deleted successfully",
+        data: result,
+    });
+});
+
+const getAllPayments = catchAsync(async (req: Request, res: Response) => {
+    const result = await SuperAdminService.getAllPayments();
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Payments retrieved successfully",
+        data: result,
+    });
+});
+
+const updatePayment = catchAsync(async (req: Request, res: Response) => {
+    const result = await SuperAdminService.updatePayment(
+        req.params.id as string,
+        req.body,
+        req.user as IRequestUser
+    );
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Payment updated successfully",
+        data: result,
+    });
+});
+
+const getActivities = catchAsync(async (req: Request, res: Response) => {
+    const limit = req.query.limit ? Number(req.query.limit) : 100;
+    const result = await SuperAdminService.getActivities(limit);
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Activities retrieved successfully",
+        data: result,
+    });
+});
+
+const getDashboardStats = catchAsync(async (req: Request, res: Response) => {
+    const result = await SuperAdminService.getDashboardStats();
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Dashboard stats retrieved successfully",
+        data: result,
+    });
+});
+
+const getPlatformReports = catchAsync(async (req: Request, res: Response) => {
+    const result = await SuperAdminService.getPlatformReports();
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Platform reports retrieved successfully",
+        data: result,
+    });
+});
+
+const getActiveCustomers = catchAsync(async (req: Request, res: Response) => {
+    const result = await SuperAdminService.getActiveCustomers();
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Active customers retrieved successfully",
+        data: result,
+    });
+});
+
+const getChurnedCustomers = catchAsync(async (req: Request, res: Response) => {
+    const result = await SuperAdminService.getChurnedCustomers();
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Churned customers retrieved successfully",
+        data: result,
+    });
+});
+
+const sendFollowupEmail = catchAsync(async (req: Request, res: Response) => {
+    const result = await SuperAdminService.sendFollowupEmail(
+        req.params.ownerId as string,
+        req.body,
+        req.user as IRequestUser
+    );
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Follow-up email processed",
+        data: result,
+    });
+});
+
+const resetOwnerData = catchAsync(async (req: Request, res: Response) => {
+    const result = await SuperAdminService.resetOwnerData(
+        req.params.ownerId as string,
+        (req.body?.password as string) || "",
+        req.user as IRequestUser
+    );
+    sendResponse(res, {
+        success: true,
+        httpStatus: status.OK,
+        message: "Owner data reset successfully",
+        data: result,
+    });
+});
+
+export const SuperAdminController = {
+    getAllOwners,
+    resetOwnerData,
+    updateOwnerSubscription,
+    grantTrialExtension,
+    deleteOwner,
+    getAllPayments,
+    updatePayment,
+    getActivities,
+    getDashboardStats,
+    getPlatformReports,
+    getActiveCustomers,
+    getChurnedCustomers,
+    sendFollowupEmail,
+};

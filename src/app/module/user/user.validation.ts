@@ -1,0 +1,46 @@
+import z from "zod";
+import { passwordSchema } from "../../utils/password.js";
+import { Role } from "../../../generated/prisma/enums.js";
+
+// Owners can only create workspace staff roles - never another owner/super admin.
+const staffRoles = [Role.manager, Role.sales_staff, Role.accountant] as const;
+
+export const createTeamUserZodSchema = z.object({
+    email: z.email("Email must be a valid email address"),
+    password: passwordSchema(),
+    full_name: z.string("Full name must be string").min(1, "Full name is required"),
+    role: z.enum(staffRoles, "Role must be one of manager, sales_staff, accountant"),
+    phone: z.string("Phone must be string").optional(),
+    // Unknown names are dropped in the service rather than rejected here, so a
+    // frontend from a slightly older deploy cannot fail the whole save.
+    permissions: z.array(z.string("Permission must be string")).optional(),
+    avatar_url: z.string("avatar_url must be string").optional(),
+});
+
+export const updateTeamUserZodSchema = z.object({
+    user_id: z.uuid("user_id must be a valid UUID"),
+    role: z.enum(staffRoles, "Role must be one of manager, sales_staff, accountant").optional(),
+    full_name: z.string("Full name must be string").optional(),
+    phone: z.string("Phone must be string").optional(),
+    is_active: z.boolean("is_active must be a boolean").optional(),
+    avatar_url: z.string("avatar_url must be string").optional(),
+    password: passwordSchema().optional(),
+    permissions: z.array(z.string("Permission must be string")).optional(),
+});
+
+// What a user may change about their own account. Deliberately not role or
+// is_active: an owner who demoted or deactivated themselves would lock
+// themselves out of the workspace with no way back in.
+export const updateOwnProfileZodSchema = z.object({
+    full_name: z.string("Full name must be string").min(1, "Full name is required").optional(),
+    phone: z.string("Phone must be string").optional(),
+    avatar_url: z.string("avatar_url must be string").optional(),
+});
+
+export const deleteTeamUserZodSchema = z.object({
+    user_id: z.uuid("user_id must be a valid UUID"),
+});
+
+export type ICreateTeamUserPayload = z.infer<typeof createTeamUserZodSchema>;
+export type IUpdateTeamUserPayload = z.infer<typeof updateTeamUserZodSchema>;
+export type IUpdateOwnProfilePayload = z.infer<typeof updateOwnProfileZodSchema>;

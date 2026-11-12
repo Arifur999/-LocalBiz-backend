@@ -1,0 +1,269 @@
+// Replaces Supabase auth.users + profiles (merged into one table).
+// Field names stay snake_case so API responses match what the frontend expects.
+
+model User {
+  id             String    @id @default(uuid())
+  email          String    @unique
+  password       String
+  full_name      String    @default("")
+  role           Role      @default(owner)
+  phone          String    @default("")
+  // Cloudinary URL from POST /uploads/image. Empty means "show initials".
+  avatar_url     String    @default("")
+  branch_id      String?
+  is_active      Boolean   @default(true)
+  // SaaS email verification: a user cannot use the app until they confirm
+  // the 6-digit OTP sent to their email at registration (or at login if
+  // they never verified). Team users created by an owner are auto-verified.
+  email_verified Boolean   @default(false)
+  // Bumped whenever every existing session for this user must stop working -
+  // today that means a password change, whether the user reset it themselves or
+  // an owner set a new one for their staff. The number is stamped into each
+  // token and compared on every request, so changing a password because the
+  // account was compromised actually ends the attacker's session instead of
+  // leaving it live until the token expires.
+  //
+  // Starts at 0, and a token with no version claim is read as 0, so tokens
+  // issued before this column existed keep working - nobody is signed out by
+  // the upgrade itself.
+  token_version  Int       @default(0)
+  // What this user may do WITHIN their role - see shared/permissions.ts.
+  //
+  // Empty means "everything the role allows", which is what makes this safe to
+  // add to a live system: every existing team member has an empty array on the
+  // morning of the upgrade and nobody loses access. Restrictions only start
+  // applying to a user once somebody ticks boxes for them.
+  permissions    String[]  @default([])
+  // Was to hold each user permission array as it stood before the move from the
+  // old action-shaped vocabulary ("View Sales") to the menu-shaped one
+  // ("page:sales.ledger"), so a rollback would be one UPDATE.
+  //
+  // In the event it was never written to: only two users in the whole database
+  // had any ticks at all, and both were migrated by hand in SQL on 2026-10-01 -
+  // in two steps, holding both vocabularies at once, so there was never a moment
+  // needing a rollback. The column is empty everywhere and can be dropped.
+  legacy_permissions String[] @default([])
+  // For owners: owner_id = own id. For team members: points to their owner.
+  owner_id       String?
+  last_active    DateTime?
+  created_at     DateTime  @default(now())
+  updated_at     DateTime  @updatedAt
+
+  owner        User?  @relation("OwnerTeam", fields: [owner_id], references: [id], onDelete: Cascade)
+  team_members User[] @relation("OwnerTeam")
+
+  subscription          OwnerSubscription?
+  subscription_payments SubscriptionPayment[]
+
+  sms_wallet         SmsWallet?
+  sms_purchases      SmsPurchase[]
+  sms_messages       SmsMessage[]
+  marketing_contacts MarketingContact[]
+  leads               Lead[]
+  support_tickets    SupportTicket[]
+
+  @@index([owner_id])
+  @@map("users")
+}
+
+model OwnerSubscription {
+  id             String             @id @default(uuid())
+  owner_id       String             @unique
+  business_name  String             @default("")
+  owner_email    String             @default("")
+  // Owner's contact address, captured at registration / the trial popup and
+  // shown to the super admin (Free Trial page) for follow-up.
+  address        String             @default("")
+  status         SubscriptionStatus @default(active)
+  plan           String             @default("Trial")
+  trial_start    DateTime           @default(now())
+  trial_end      DateTime
+  active_until   DateTime?
+  plan_type      PlanType           @default(free_trial)
+  plan_status    PlanStatus         @default(active)
+  start_date     DateTime           @default(now())
+  expiry_date    DateTime
+  blocked_reason String             @default("")
+  // True once the one free trial has been consumed. New registrations start
+  // with this FALSE (registerOwner) so the owner can start their trial from
+  // the free-trial card popup on /choose-plan; choosePlan() flips it true and
+  // then refuses any further free_trial, forever - only the super admin's
+  // grant-trial-extension can revive access. The column default stays true so
+  // the original backfill correctly marked every pre-existing owner (who had
+  // already had their registration trial) as used.
+  trial_used     Boolean            @default(true)
+  created_at     DateTime           @default(now())
+  updated_at     DateTime           @updatedAt
+
+  owner User @relation(fields: [owner_id], references: [id], onDelete: Cascade)
+
+  @@index([plan_status])
+  @@index([expiry_date])
+  @@map("owner_subscriptions")
+}
+
+// Real data behind the Super Admin "Payments" page (was demo data before).
+// sender_number/trx_id are filled when the owner submits a manual bKash
+// payment (see subscription.service.ts submitManualPayment) - a super admin
+// reviews these two fields against their own bKash statement before
+// approving.
+model SubscriptionPayment {
+  id            String           @id @default(uuid())
+  // Nullable so the payment outlives the customer: a business's books are
+  // not a child record of whoever paid into them. See the
+  // 20260821120000_keep_payment_history migration.
+  owner_id      String?
+  invoice_no    String           @default("")
+  plan_type     PlanType         @default(monthly)
+  method        String           @default("")
+  status        SubPaymentStatus @default(pending)
+  amount        Decimal          @default(0) @db.Decimal(15, 2)
+  sender_number String           @default("")
+  trx_id        String           @default("")
+  date          DateTime         @default(now())
+  notes         String           @default("")
+  created_at    DateTime         @default(now())
+
+  owner User? @relation(fields: [owner_id], references: [id], onDelete: SetNull)
+
+  @@index([owner_id])
+  @@map("subscription_payments")
+}
+
+// Singleton row (there is only ever one) holding everything the super admin
+// can edit about payment collection: where customers should send the manual
+// bKash payment, and the wording of expiry-reminder emails.
+model PlatformSetting {
+  id String @id @default(uuid())
+
+  // Manual bKash payment details shown on the checkout page.
+  bkash_number          String  @default("")
+  bkash_qr_url          String  @default("")
+  yearly_price          Decimal @default(5780) @db.Decimal(15, 2)
+  // Struck-through "regular price" shown next to yearly_price on the plans
+  // page so the discount is visible (e.g. ~7188 crossed out -> 5780). Purely
+  // a marketing display value - never charged, never used in payment math.
+  yearly_original_price Decimal @default(7188) @db.Decimal(15, 2)
+  // Monthly plan price (no yearly discount). Charged when an owner picks the
+  // monthly plan from the Current Plan / choose-plan cards.
+  monthly_price         Decimal @default(599) @db.Decimal(15, 2)
+
+  // Hotline shown to an owner while their manual payment awaits approval, so
+  // they know who to call if activation is taking too long. Editable by the
+  // super admin in Settings; the frontend falls back to lib/support.ts when it
+  // is blank, so the two should be kept in step.
+  support_number String @default("01719731884")
+
+  // Expiry reminder email template. Supports {{name}}, {{business_name}},
+  // {{days_left}}, {{expiry_date}}, {{plan}} placeholders - see
+  // app/utils/email.ts renderTemplate().
+  reminder_subject String @default("Your subscription expires in {{days_left}} days")
+  reminder_body    String @default("") @db.Text
+
+  updated_at DateTime @updatedAt
+
+  @@map("platform_settings")
+}
+
+// Tracks which expiry-reminder emails have already gone out so the daily
+// cron never double-sends. One row per (owner, days_before, expiry_date) -
+// the expiry_date component means a renewal naturally resets the reminders.
+model ReminderLog {
+  id          String   @id @default(uuid())
+  owner_id    String
+  days_before Int
+  expiry_date DateTime
+  sent_at     DateTime @default(now())
+
+  @@unique([owner_id, days_before, expiry_date])
+  @@map("reminder_logs")
+}
+
+// One-time passwords for email verification.
+// - code_hash: we never store the raw OTP, only its bcrypt hash
+// - expires_at: OTP dies after 5 minutes
+// - attempts: brute-force guard, max 5 wrong tries per code
+// - last_sent_at: resend cooldown (60s) is measured from here
+model Otp {
+  id           String   @id @default(uuid())
+  email        String
+  code_hash    String
+  purpose      String   @default("verify_email")
+  expires_at   DateTime
+  attempts     Int      @default(0)
+  last_sent_at DateTime @default(now())
+  created_at   DateTime @default(now())
+
+  @@index([email, purpose])
+  @@map("otps")
+}
+
+// Server-backed recycle bin (was localStorage before). Pages push a snapshot
+// of the deleted record here; restore re-inserts the JSON into its table.
+model RecycleBinItem {
+  id         String   @id @default(uuid())
+  owner_id   String
+  type       String
+  title      String   @default("")
+  subtitle   String   @default("")
+  amount     Decimal  @default(0) @db.Decimal(15, 2)
+  table_name String   @default("")
+  data       Json?
+  deleted_at DateTime @default(now())
+  deleted_by String?
+
+  @@index([owner_id, type])
+  @@map("recycle_bin_items")
+}
+
+// An unfinished purchase order or invoice, parked so it can be picked up later.
+//
+// Deliberately NOT a row in `purchases` / `sales` with a draft status. A draft
+// is a saved FORM, not an order: it is usually incomplete - that is the point -
+// and the real create validators require at least one fully-formed line. Worse,
+// a half-written row in those tables leaks into figures nobody would re-check:
+// the inventory page aggregates purchase_items and sale_items with no join back
+// to their parent, supplier and customer dues are derived from due_amount, the
+// sales ledger sums net_amount over every row, and the row write itself is what
+// reserves an si_no / invoice_no.
+//
+// Nothing else queries this table, so none of that can happen. Publishing loads
+// the snapshot back into the form and the user presses the ordinary button.
+//
+// Shaped like RecycleBinItem above, down to `kind` being a plain string rather
+// than a Postgres enum - an enum here would buy nothing and cost a migration
+// every time a third kind of draft turns up.
+model Draft {
+  id              String   @id @default(uuid())
+  owner_id        String
+  /// "purchase_order" | "sale"
+  kind            String
+  title           String   @default("")
+  subtitle        String   @default("")
+  amount          Decimal  @default(0) @db.Decimal(15, 2)
+  data            Json?
+  /// The shape of `data`. A page refuses a draft stamped with a version it no
+  /// longer understands, rather than hydrating a form half-way.
+  payload_version Int      @default(1)
+  created_by      String?
+  updated_by      String?
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@index([owner_id, kind])
+  @@map("drafts")
+}
+
+// Real data behind the Super Admin "Activity" page (was demo data before).
+model AdminActivity {
+  id          String   @id @default(uuid())
+  owner_id    String?
+  actor_email String   @default("")
+  action      String
+  detail      String   @default("")
+  created_at  DateTime @default(now())
+
+  @@index([owner_id])
+  @@index([created_at])
+  @@map("admin_activities")
+}

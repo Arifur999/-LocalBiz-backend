@@ -1,0 +1,306 @@
+# Deploying to the Hostinger VPS
+
+One VPS serves everything: nginx answers the domain, hands `/api/` to the
+backend container, and serves the built SPA for every other path. Postgres runs
+beside them on the same Docker network and is never exposed to the internet.
+
+Push to `main` → GitHub runs the quality check → only if it passes does GitHub
+SSH in and update the server. Nothing is uploaded by hand.
+
+---
+
+> Starting from an empty database. The old Railway data was test data and is
+> not being migrated, so there is nothing to restore — the first boot creates
+> the schema and the super admin, and you enter real data from there.
+
+## 1. Prepare the VPS
+
+SSH in as root and install Docker:
+
+```bash
+apt update && apt upgrade -y
+curl -fsSL https://get.docker.com | sh
+```
+
+Create the user GitHub will log in as:
+
+```bash
+adduser --disabled-password --gecos "" deploy
+usermod -aG docker deploy          # run docker without sudo
+mkdir -p /srv/localbiz && chown deploy:deploy /srv/localbiz
+```
+
+Firewall — SSH and web only:
+
+```bash
+ufw allow OpenSSH && ufw allow 80 && ufw allow 443 && ufw --force enable
+```
+
+---
+
+## 2. Clone both repos as siblings
+
+The compose file mounts `../localbiz-frontend/dist`, so these folder names matter:
+
+```bash
+su - deploy
+cd /srv/localbiz
+git clone https://github.com/Arifur999/-LocalBiz-backend.git localbiz-backend
+git clone https://github.com/Arifur999/-LocalBiz.git localbiz-frontend
+mkdir -p localbiz-frontend/dist        # CI fills this on the first frontend deploy
+```
+
+---
+
+## 3. Write the backend `.env`
+
+`/srv/localbiz/localbiz-backend/.env` — never committed:
+
+```bash
+POSTGRES_USER=localbiz
+POSTGRES_PASSWORD=<long random password>
+POSTGRES_DB=localbiz
+
+# Host is the compose service name, NOT localhost, and must match the three above.
+DATABASE_URL=postgresql://localbiz:<same password>@postgres:5432/localbiz
+
+ACCESS_TOKEN_SECRET=<long random string>
+REFRESH_TOKEN_SECRET=<a different long random string>
+SUPER_ADMIN_EMAIL=you@example.com
+SUPER_ADMIN_PASSWORD=<your password>
+
+FRONTEND_URL=https://your-domain.com
+
+RESEND_API_KEY=<your key>
+RESEND_FROM_EMAIL=<your key>
+CLOUDINARY_CLOUD_NAME=<your key>
+CLOUDINARY_API_KEY=<your key>
+CLOUDINARY_API_SECRET=<your key>
+MRAM_API_KEY=<your MRAM key>
+MRAM_SENDER_ID=<your approved sender id>
+```
+
+Copy every value you already had on Railway. `openssl rand -hex 32` makes a
+good secret. Then lock the file down: `chmod 600 .env`.
+
+---
+
+## 4. First start
+
+```bash
+cd /srv/localbiz/localbiz-backend
+docker compose up -d --build
+docker compose logs -f backend      # Ctrl-C once the server has started
+```
+
+The container runs `prisma migrate deploy` on start, so every table is created
+on this first boot, and the super admin from `SUPER_ADMIN_EMAIL` /
+`SUPER_ADMIN_PASSWORD` is seeded. Nothing else to load — the database starts
+empty and you enter real data through the app.
+
+Check it came up:
+
+```bash
+docker compose ps                          # all three services "Up"
+curl -s -o /dev/null -w "%{http_code}\n" localhost/api/v1/auth/me   # expect 401
+```
+
+`401` is the healthy answer: the route exists and is asking for a login.
+
+---
+
+## 5. Point the domain at the VPS
+
+In Hostinger DNS for `your-domain.com`, replace the existing records:
+
+| Type | Name  | Value       |
+| ---- | ----- | ----------- |
+| A    | `@`   | your VPS IP |
+| A    | `www` | your VPS IP |
+
+Delete whatever pointed the domain at the old shared hosting (an `ALIAS`/`CNAME`
+to `*.hstgr.net`, an `ftp` A record) but **keep every email record** — the
+`resend._domainkey` and `_dmarc` TXT records and the `send` TXT/MX pair are what
+make the login codes arrive instead of landing in spam. Never use the panel's
+"Reset DNS records" button; it removes those too.
+
+Wait until `dig +short your-domain.com` returns the VPS IP.
+
+---
+
+## 6. HTTPS
+
+`nginx.conf` expects the certificate to exist — nginx refuses to start with an
+`ssl_certificate` it cannot read, so on a **brand-new** server issue the
+certificate before bringing nginx up with this config:
+
+```bash
+cd /srv/localbiz/localbiz-backend
+docker compose run --rm -p 80:80 certbot certonly --standalone \
+  -d your-domain.com -d www.your-domain.com \
+  --email you@example.com --agree-tos --no-eff-email
+docker compose up -d
+```
+
+Once nginx is running, renewals use the webroot instead, so nothing has to stop:
+
+```bash
+docker compose run --rm certbot renew && docker compose restart nginx
+```
+
+Certificates last 90 days. Renewal is already scheduled in the `deploy` user's
+crontab (`crontab -l` to see it):
+
+```
+0 3 * * 1 cd /srv/localbiz/localbiz-backend && docker compose run --rm certbot renew --quiet && docker compose restart nginx
+```
+
+---
+
+## 7. Wire up automatic deploys
+
+On the VPS, create the key GitHub will use:
+
+```bash
+ssh-keygen -t ed25519 -C "github-deploy" -f ~/.ssh/github_deploy -N ""
+cat ~/.ssh/github_deploy.pub >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+cat ~/.ssh/github_deploy          # the PRIVATE key - copy all of it
+ssh-keyscan -H <VPS_IP>           # copy this output too
+```
+
+Add these to **both** repos (Settings → Secrets and variables → Actions):
+
+| Secret                | Value                                          |
+| --------------------- | ---------------------------------------------- |
+| `VPS_HOST`            | VPS IP                                          |
+| `VPS_USER`            | `deploy`                                        |
+| `VPS_SSH_KEY`         | the whole private key, `-----BEGIN` to `-----END` |
+| `VPS_SSH_KNOWN_HOSTS` | the `ssh-keyscan` output                        |
+| `VPS_APP_DIR`         | `/srv/localbiz`                                    |
+| `VPS_SSH_PORT`        | only if SSH is not on port 22                   |
+
+The same five secrets go in both repos. Each workflow ends by fetching
+`https://your-domain.com` the way a customer would, so a green deploy
+means DNS, the certificate, nginx and the container are all actually working.
+
+Everything under `/srv/localbiz` must stay owned by `deploy` — that is the user CI
+logs in as. Running `git` or a build there as root leaves root-owned files
+behind and the next deploy fails on permissions; `chown -R deploy:deploy
+/srv/localbiz` puts it right.
+
+From then on every push to `main` type-checks, lints and builds; only if that
+passes does GitHub update the server — the backend rebuilds its image and runs
+pending migrations, the frontend uploads a fresh `dist`. Each workflow finishes
+by checking the live site actually answers.
+
+---
+
+## Everyday commands
+
+```bash
+cd /srv/localbiz/localbiz-backend
+docker compose ps                  # what is running
+docker compose logs -f backend     # follow API logs
+docker compose restart backend     # restart just the API
+docker compose down && docker compose up -d --build   # full rebuild
+```
+
+## Running a one-off script
+
+The scripts in `scripts/` are TypeScript and need the dev dependencies plus a
+generated Prisma client, neither of which the runtime image carries — and
+Postgres is not published to the host, so the script has to run on the compose
+network. Build the Dockerfile's `build` stage, which has all three:
+
+```bash
+cd /srv/localbiz/localbiz-backend
+git pull
+
+# The network the stack is actually on, read from the running backend.
+NET=$(docker inspect -f '{{range $k, $_ := .NetworkSettings.Networks}}{{$k}}{{end}}' "$(docker compose ps -q backend)")
+
+docker build --target build -t localbiz-scripts .
+docker run --rm --network "$NET" --env-file .env localbiz-scripts npx tsx scripts/fixBatchCosts.ts
+```
+
+Take a backup first (`scripts/backup-db.sh`) for anything that writes. Every
+one-off script here prints what it would change and is safe to run twice;
+`fixBatchCosts.ts` and `backfillLoanProfitMirror.ts` write nothing at all
+until you add `--apply`.
+
+### `fixBatchCosts.ts` — the stock that was costed at the list price
+
+A product stores its list DP and the discount negotiated on it separately, so a
+price list can print "Tk 11,400 -10%". Two paths used to write the **list**
+figure into the FIFO batch every sale is costed against — opening stock
+ignoring `dp_discount`, and a purchase receive whose `actual_dp` was left at its
+0 default ignoring `discount_pct`. Both are fixed at the point of writing now;
+this repairs what is already on the books.
+
+The symptom is one product reading at different rates from one invoice to the
+next, and profit reported lower than it was. Run the dry run — it writes
+nothing and prints every batch, layer and sale line it would change, plus how
+much reported profit will rise:
+
+```bash
+docker run --rm --network "$NET" --env-file .env localbiz-scripts npx tsx scripts/fixBatchCosts.ts
+docker run --rm --network "$NET" --env-file .env localbiz-scripts npx tsx scripts/fixBatchCosts.ts --apply
+```
+
+It only touches what goods **cost** — never a quantity, a stock level, a cash
+figure or an account balance. Reported profit rises across the months holding
+the affected sales, and stock value on the Inventory page falls; both were
+overstated. A batch genuinely received at a different price from the current
+list is left alone, so it is safe to run twice.
+
+If it prints nothing, the data is already right and any difference between two
+sales of one product is FIFO working as it should: stock leaves oldest batch
+first, so batches bought at different prices cost different amounts.
+
+### `backfillLoanProfitMirror.ts` — read this before running it
+
+Loan profit rows entered before the `loan_profit_mirror` migration have no
+expense or other-income behind them, so history reads as though interest were
+free. This script writes those missing rows.
+
+**It moves the reported profit of every past month that contains a profit
+row**, by the interest in it. That is the point — but run it on a day when
+nobody is quoting last month's figure to anyone. List first, then apply:
+
+```bash
+docker run --rm --network "$NET" --env-file .env localbiz-scripts npx tsx scripts/backfillLoanProfitMirror.ts
+docker run --rm --network "$NET" --env-file .env localbiz-scripts npx tsx scripts/backfillLoanProfitMirror.ts --apply
+```
+
+Profit **paid** is filed under a `Loan Profit Paid` category the script creates
+once per workspace; individual rows can be re-filed afterwards from Loan
+Transactions. Profit **received** goes to Other Income under the lender's name.
+No cash balance moves either way — the mirrored rows carry no account, because
+the loan row already moved the money.
+
+## Backups
+
+`scripts/backup-db.sh` dumps the database to `/srv/localbiz/backups` and deletes
+dumps older than 14 days. It runs nightly from the deploy user's crontab:
+
+```
+30 2 * * * /srv/localbiz/localbiz-backend/scripts/backup-db.sh >> /srv/localbiz/backups/backup.log 2>&1
+```
+
+Check it is working — `tail /srv/localbiz/backups/backup.log` and `ls -lh
+/srv/localbiz/backups`. A dump that comes back empty is deleted rather than kept,
+so a file existing means it has content.
+
+To restore:
+
+```bash
+cd /srv/localbiz/localbiz-backend
+set -a; . ./.env; set +a
+docker compose exec -T postgres pg_restore -U "$POSTGRES_USER" \
+  -d "$POSTGRES_DB" --clean --if-exists < /srv/localbiz/backups/db-YYYY-MM-DD-HHMM.dump
+```
+
+These dumps sit on the same disk as the database. That covers a bad deploy or a
+deleted record, not the disk itself dying — copy them somewhere else
+(Hostinger snapshots, or `scp` to another machine) for that.

@@ -1,0 +1,274 @@
+import nodemailer from "nodemailer";
+import { env } from "../../config/env.js";
+import { PRODUCT_NAME } from "../config/brand.js";
+import { escapeHtml } from "./escapeHtml.js";
+
+// ---------------------------------------------------------------------------
+// Email sender.
+//
+// Credential resolution order:
+//  1. Resend (HTTPS API, api.resend.com) - RESEND_API_KEY. Preferred: it's a
+//     plain HTTPS call, so it works on hosts that block outbound SMTP ports
+//     to fight spam (Railway does this - direct SMTP to Gmail from there
+//     hangs until ETIMEDOUT/ENETUNREACH, well past any reasonable request
+//     timeout). SMTP/OAuth2 below still work fine for local dev or hosts
+//     that do allow outbound SMTP.
+//  2. Google OAuth2  - GOOGLE_MAIL_USER + CLIENT_ID/SECRET + REFRESH_TOKEN
+//                      (nodemailer exchanges the refresh token for access
+//                      tokens automatically on every send)
+//  3. SMTP password  - EMAIL_SENDER_SMTP_USER + PASS (e.g. Gmail App Password)
+//  4. Console        - nothing configured: the OTP is printed to the server
+//                      console so the flow stays testable in development
+// ---------------------------------------------------------------------------
+
+const isResendConfigured = () => Boolean(env.RESEND.API_KEY);
+
+// OAuth2 is "configured" only when every required piece exists.
+const isOAuthConfigured = () =>
+    Boolean(
+        env.GOOGLE.MAIL_USER &&
+        env.GOOGLE.CLIENT_ID &&
+        env.GOOGLE.CLIENT_SECRET &&
+        env.GOOGLE.REFRESH_TOKEN
+    );
+
+// SMTP password fallback needs both user and password.
+const isSmtpConfigured = () =>
+    Boolean(env.EMAIL_SENDER.SMTP_USER && env.EMAIL_SENDER.SMTP_PASS);
+
+// Build the transporter lazily (once) so a missing config never crashes boot.
+let transporter: nodemailer.Transporter | null = null;
+
+const getTransporter = () => {
+    if (!transporter) {
+        if (isOAuthConfigured()) {
+            // Gmail over OAuth2: no password stored anywhere, Google issues
+            // short-lived access tokens from the long-lived refresh token.
+            transporter = nodemailer.createTransport({
+                service: "gmail",
+                auth: {
+                    type: "OAuth2",
+                    user: env.GOOGLE.MAIL_USER,
+                    clientId: env.GOOGLE.CLIENT_ID,
+                    clientSecret: env.GOOGLE.CLIENT_SECRET,
+                    refreshToken: env.GOOGLE.REFRESH_TOKEN,
+                },
+            });
+        } else {
+            // Classic SMTP with username/password (Gmail App Password etc.).
+            transporter = nodemailer.createTransport({
+                host: env.EMAIL_SENDER.SMTP_HOST,
+                port: Number(env.EMAIL_SENDER.SMTP_PORT),
+                // Port 465 = implicit TLS; anything else (587...) uses STARTTLS.
+                secure: Number(env.EMAIL_SENDER.SMTP_PORT) === 465,
+                auth: {
+                    user: env.EMAIL_SENDER.SMTP_USER,
+                    pass: env.EMAIL_SENDER.SMTP_PASS,
+                },
+            });
+        }
+    }
+    return transporter;
+};
+
+// The address shown in the "From" header, picked from whichever credential
+// set is active.
+const fromAddress = () =>
+    isOAuthConfigured() ? env.GOOGLE.MAIL_USER : env.EMAIL_SENDER.SMTP_FROM;
+
+/**
+ * Which provider will send the next email, and the address it will send from.
+ *
+ * The chain above is silent about itself. Resend is tried FIRST, so filling in
+ * the SMTP block while RESEND_API_KEY is still set changes nothing and reports
+ * nothing - mail keeps going out from the old address with no error anywhere.
+ * Printed once at boot, this is what tells you which credentials are live.
+ *
+ * Only the From address is named. It is on every email this server sends, so
+ * it is not a secret; keys and passwords are deliberately not printed.
+ */
+export const mailProviderSummary = (): string => {
+    if (isResendConfigured()) return `Resend, from ${env.RESEND.FROM_EMAIL}`;
+    if (isOAuthConfigured()) return `Google OAuth2, from ${env.GOOGLE.MAIL_USER}`;
+    if (isSmtpConfigured()) {
+        return `SMTP ${env.EMAIL_SENDER.SMTP_HOST}:${env.EMAIL_SENDER.SMTP_PORT}, from ${env.EMAIL_SENDER.SMTP_FROM}`;
+    }
+    return "no provider configured - nothing will be delivered";
+};
+
+// Plain HTTPS call to Resend's API - no SDK needed, Node 22's built-in fetch
+// is enough. Throws on any non-2xx response so the caller's try/catch can
+// fall through to the next provider.
+const sendViaResend = async (to: string, subject: string, html: string): Promise<void> => {
+    const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${env.RESEND.API_KEY}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            from: `${PRODUCT_NAME} <${env.RESEND.FROM_EMAIL}>`,
+            to,
+            subject,
+            html,
+        }),
+    });
+
+    if (!response.ok) {
+        const body = await response.text().catch(() => "");
+        throw new Error(`Resend API responded ${response.status}: ${body}`);
+    }
+};
+
+// Single delivery path shared by sendOtpEmail and sendTemplatedEmail: tries
+// Resend first, falls back to nodemailer (OAuth2/SMTP) if Resend isn't
+// configured or fails, and returns false (never throws) if nothing is set up
+// or every configured provider failed - callers decide what to do then
+// (sendOtpEmail logs the raw code so the user can still be helped manually).
+const deliverEmail = async (to: string, subject: string, html: string): Promise<boolean> => {
+    if (isResendConfigured()) {
+        try {
+            await sendViaResend(to, subject, html);
+            return true;
+        } catch (error) {
+            console.error(`[mail] Resend failed for ${to}:`, error);
+        }
+    }
+
+    if (isOAuthConfigured() || isSmtpConfigured()) {
+        try {
+            await getTransporter().sendMail({
+                from: `"${PRODUCT_NAME}" <${fromAddress()}>`,
+                to,
+                subject,
+                html,
+            });
+            return true;
+        } catch (error) {
+            console.error(`[mail] SMTP/OAuth2 failed for ${to}:`, error);
+        }
+    }
+
+    if (!isResendConfigured() && !isOAuthConfigured() && !isSmtpConfigured()) {
+        console.log(`[mail] No email provider configured - skipping send to ${to}`);
+    }
+
+    return false;
+};
+
+// Re-exported so the call sites that have always imported it from here keep
+// working. It lives in its own module now because importing this file pulls in
+// config/env.ts, which throws when the database URL is unset - and a template
+// builder should not need a database to render a string.
+export { escapeHtml };
+
+// Table-based layout (not divs/flexbox) because Outlook desktop renders mail
+// with Word's engine, which mangles modern CSS but has always understood
+// nested <table>s - this is the one layout approach that looks the same in
+// Gmail, Outlook, and Apple Mail alike. Colors match the reminder-email
+// template (defaultReminderTemplate.ts) so every system email in this app
+// shares one visual identity.
+const otpEmailHtml = (name: string, otp: string) => `
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color: #f1f5f9; padding: 32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width: 480px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; font-family: Arial, Helvetica, sans-serif;">
+          <tr>
+            <td style="background-color: #1D9E75; padding: 18px 32px;">
+              <span style="font-size: 16px; font-weight: bold; color: #ffffff;">${PRODUCT_NAME}</span>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 32px;">
+              <h1 style="margin: 0 0 10px; font-size: 20px; color: #0f172a;">Verify your email address</h1>
+              <p style="margin: 0 0 24px; font-size: 14px; line-height: 1.6; color: #334155;">
+                Hi ${escapeHtml(name) || "there"}, use the one-time code below to finish verifying your account.
+              </p>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="background-color: #f0fdf6; border: 1.5px dashed #1D9E75; border-radius: 12px; padding: 20px;">
+                    <span style="font-family: 'Courier New', monospace; font-size: 34px; font-weight: bold; letter-spacing: 10px; color: #0f172a;">${otp}</span>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin: 16px 0 24px; text-align: center;">
+                <span style="display: inline-block; background-color: #EFF6FF; color: #3B82F6; font-size: 12px; font-weight: bold; padding: 6px 14px; border-radius: 999px;">
+                  Expires in 2 minutes
+                </span>
+              </p>
+              <p style="margin: 0 0 6px; font-size: 13px; line-height: 1.6; color: #64748b;">
+                Didn't request this code? You can safely ignore this email.
+              </p>
+              <p style="margin: 0; font-size: 13px; line-height: 1.6; color: #64748b;">
+                For your security, never share this code with anyone - not even someone claiming to be our support team.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 16px 32px; background-color: #f8fafc; border-top: 1px solid #e2e8f0;">
+              <p style="margin: 0; font-size: 11px; color: #94a3b8; text-align: center;">
+                This is an automated message - please do not reply to this email.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+`;
+
+// Send the OTP mail. Returns true when a real email was sent, false when the
+// console fallback was used - callers can surface that difference if needed.
+export const sendOtpEmail = async (to: string, name: string, otp: string): Promise<boolean> => {
+    // Code in the subject too - most inboxes preview enough of the subject
+    // line to verify without even opening the email.
+    const sent = await deliverEmail(to, `${otp} is your verification code`, otpEmailHtml(name, otp));
+    if (!sent) {
+        // Every configured provider failed (or none is configured). In
+        // development the code is printed so the flow stays testable without a
+        // mail provider.
+        //
+        // Never in production: an outage at the mail provider would otherwise
+        // turn the container log into a live feed of login and password-reset
+        // codes, readable by anyone with log access. The failure is still
+        // reported, just without the code itself.
+        if (env.NODE_ENV === "production") {
+            console.error(`[otp] Delivery failed for ${to} - no provider accepted the message`);
+        } else {
+            console.log(`[otp] Fallback - OTP for ${to} is: ${otp}`);
+        }
+    }
+    return sent;
+};
+
+// ---------------------------------------------------------------------------
+// Generic templated email (used for subscription expiry reminders and the
+// super admin's "send test email" preview button).
+//
+// Templates are plain strings with {{placeholder}} tokens - super admins
+// edit them as raw HTML in Settings, so we deliberately do NOT run a full
+// templating engine here, just a straightforward find-and-replace.
+// ---------------------------------------------------------------------------
+
+// Replace every {{key}} occurrence in the template with vars[key].
+// Unknown placeholders are left as-is rather than throwing, so a typo in the
+// admin's template never crashes the reminder cron.
+export const renderTemplate = (template: string, vars: Record<string, string | number>): string => {
+    return template.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (match, key: string) => {
+        // The template itself is admin-authored HTML and stays raw. The values
+        // are not - business_name and full_name come from what an owner typed
+        // at signup - so they are escaped before being dropped into the markup.
+        return key in vars ? escapeHtml(String(vars[key])) : match;
+    });
+};
+
+// Send an already-rendered HTML email. Same Resend -> OAuth2 -> SMTP ->
+// console fallback chain as sendOtpEmail, but with a caller-supplied
+// subject/body.
+export const sendTemplatedEmail = async (to: string, subject: string, html: string): Promise<boolean> => {
+    const sent = await deliverEmail(to, subject, html);
+    if (!sent) {
+        console.log(`[mail] Could not deliver "${subject}" to ${to}`);
+    }
+    return sent;
+};
