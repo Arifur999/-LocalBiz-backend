@@ -312,6 +312,12 @@ const updatePayment = async (
     // effect. Everything below that acts on the owner is gated on this.
     const ownerId = payment.owner_id;
 
+    // Approval extends the plan once, on the move into "paid". Letting a paid
+    // payment go back to pending made paid -> pending -> paid extend it twice.
+    if (payment.status === "paid" && payload.status !== undefined && payload.status !== "paid") {
+        throw new AppError(status.CONFLICT, "This payment is already approved and the plan extended");
+    }
+
     const updated = await prisma.$transaction(async (tx) => {
         const nextPayment = await tx.subscriptionPayment.update({
             where: { id: paymentId },

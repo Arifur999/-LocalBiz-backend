@@ -57,7 +57,9 @@ const submitPurchase = async (payload: ISubmitSmsPurchasePayload, user: IRequest
         throw new AppError(status.NOT_FOUND, "SMS package not found or no longer available");
     }
 
-    const duplicate = await prisma.smsPurchase.findFirst({ where: { trx_id: payload.trx_id } });
+    // A rejected claim no longer blocks the id, so someone who pre-submits
+    // another owner's transaction id only holds it until an admin rejects it.
+    const duplicate = await prisma.smsPurchase.findFirst({ where: { trx_id: payload.trx_id, status: { in: ["pending", "paid"] } } });
     if (duplicate) {
         throw new AppError(status.CONFLICT, "This transaction ID has already been submitted");
     }
@@ -286,6 +288,13 @@ const updatePurchaseStatus = async (
     // wallet to credit and nobody to email, so an orphaned purchase can be
     // marked but never approved into an effect.
     const ownerId = purchase.owner_id;
+
+    // Approval credits the wallet once, on the move into "paid". Letting a paid
+    // purchase go back to pending made paid -> pending -> paid credit it twice.
+    if (purchase.status === "paid" && payload.status !== "paid") {
+        throw new AppError(status.CONFLICT, "This purchase is already approved and its credits issued");
+    }
+
     const justApproved = payload.status === "paid" && purchase.status !== "paid" && Boolean(ownerId);
 
     const updated = await prisma.$transaction(async (tx) => {

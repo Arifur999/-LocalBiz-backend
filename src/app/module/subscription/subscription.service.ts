@@ -60,7 +60,11 @@ const choosePlan = async (payload: IChoosePlanPayload, user: IRequestUser) => {
     // paid plan, and never by an owner the super admin blocked or suspended -
     // see trialRefusal. Only the super admin's grant-trial-extension can
     // revive trial access.
-    const refusal = isTrial ? trialRefusal(existing) : null;
+    // A blocked or suspended owner is refused for EVERY plan, not only the
+    // trial: a paid choice also writes plan_status and clears blocked_reason,
+    // which wiped the super admin's block from their own screen.
+    const lockedOut = trialRefusal(existing) === "locked";
+    const refusal = lockedOut ? "locked" : isTrial ? trialRefusal(existing) : null;
     if (refusal === "locked") {
         throw new AppError(status.FORBIDDEN, "This account is blocked or suspended. Please contact the super admin.");
     }
@@ -130,7 +134,9 @@ const submitManualPayment = async (payload: ISubmitManualPaymentPayload, user: I
     // Guard against the same transaction id being submitted twice (by this
     // owner or, in theory, copy-pasted by another one).
     const duplicate = await prisma.subscriptionPayment.findFirst({
-        where: { trx_id: payload.trx_id },
+        // Failed or refunded claims no longer block the id, so pre-submitting
+        // another owner's transaction id holds it only until an admin rejects it.
+        where: { trx_id: payload.trx_id, status: { in: ["pending", "paid"] } },
     });
 
     if (duplicate) {
@@ -183,7 +189,11 @@ const submitManualPayment = async (payload: ISubmitManualPaymentPayload, user: I
             existingSub?.expiry_date != null &&
             existingSub.expiry_date.getTime() > Date.now();
 
-        if (!activeNow) {
+        // A blocked or suspended owner may still send a payment for the super
+        // admin to look at, but it must not overwrite the block itself.
+        const locked = existingSub != null && trialRefusal(existingSub) === "locked";
+
+        if (!activeNow && !locked) {
             await tx.ownerSubscription.update({
                 where: { owner_id: user.ownerId },
                 data: {
