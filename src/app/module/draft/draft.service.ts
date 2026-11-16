@@ -138,12 +138,16 @@ const updateDraft = async (id: string, payload: ISaveDraftPayload, user: IReques
 
     const existing = await prisma.draft.findFirst({
         where: { id, owner_id: user.ownerId },
-        select: { id: true },
+        select: { id: true, kind: true },
     });
 
     if (!existing) {
         throw new AppError(status.NOT_FOUND, "Draft not found");
     }
+
+    // The stored kind too, not only the one sent: otherwise sales staff could
+    // overwrite a purchase-order draft by resaving it as a sale.
+    assertMayWrite(existing.kind as IDraftKind, user);
 
     return prisma.draft.update({
         where: { id },
@@ -173,12 +177,15 @@ const updateDraft = async (id: string, payload: ISaveDraftPayload, user: IReques
 const deleteDraft = async (id: string, user: IRequestUser) => {
     const existing = await prisma.draft.findFirst({
         where: { id, owner_id: user.ownerId },
-        select: { id: true },
+        select: { id: true, kind: true },
     });
 
     if (!existing) {
         throw new AppError(status.NOT_FOUND, "Draft not found");
     }
+
+    // Same rule as writing: sales staff may not throw away purchase orders.
+    assertMayWrite(existing.kind as IDraftKind, user);
 
     await prisma.draft.delete({ where: { id } });
 

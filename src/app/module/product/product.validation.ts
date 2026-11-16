@@ -43,7 +43,9 @@ export const createProductZodSchema = z.object({
 export const updateProductZodSchema = createProductZodSchema.partial();
 
 export const bulkUpsertProductsZodSchema = z.object({
-    products: z.array(createProductZodSchema).min(1, "At least one product is required"),
+    // The browser sends 100 per request (csvImport.ts); 500 leaves room without
+    // letting one body hold an unbounded transaction open.
+    products: z.array(createProductZodSchema).min(1, "At least one product is required").max(500, "At most 500 products per request"),
 });
 
 /**

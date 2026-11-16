@@ -1,5 +1,5 @@
 import z from "zod";
-import { SaleStatus } from "../../../generated/prisma/enums.js";
+import { DeliveryStatus, SaleStatus } from "../../../generated/prisma/enums.js";
 
 const saleItemZodSchema = z.object({
     product_id: z.uuid("Product id must be a valid UUID"),
@@ -67,7 +67,7 @@ export const patchSaleZodSchema = z.object({
     account_name: z.string("Account name must be string").optional(),
     notes: z.string("Notes must be string").optional(),
     status: z.enum([SaleStatus.draft, SaleStatus.completed, SaleStatus.cancelled], "Invalid status").optional(),
-    delivery_status: z.string("Delivery status must be string").optional(),
+    delivery_status: z.enum([DeliveryStatus.pending, DeliveryStatus.partial, DeliveryStatus.delivered], "Invalid delivery status").optional(),
 }).refine((payload) => Object.keys(payload).length > 0, {
     message: "Nothing to update",
 });

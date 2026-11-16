@@ -27,6 +27,11 @@ export interface ListOptions {
 export const escapeLikeTerm = (term: string): string =>
     term.replace(/[\\%_]/g, (character) => `\\${character}`);
 
+export const MAX_PAGE_SIZE = 500;
+
+const clampLimit = (limit: number | undefined) =>
+    limit === undefined ? undefined : Math.min(limit, MAX_PAGE_SIZE);
+
 const positiveInt = (value: unknown): number | undefined => {
     if (typeof value !== "string" || value.trim() === "") return undefined;
     const parsed = Number(value);
@@ -54,7 +59,9 @@ export const parseListOptions = (query: Record<string, unknown>): ListOptions =>
     const search = typeof query.search === "string" ? query.search.trim() : "";
     return {
         page: positiveInt(query.page),
-        limit: positiveInt(query.limit),
+        // Capped: one ?limit=10000000 should not be a single giant query. The
+        // browser asks for 40 a page; MAX_PAGE_SIZE leaves plenty of room.
+        limit: clampLimit(positiveInt(query.limit)),
         search: search || undefined,
         from: isoDate(query.from),
         to: isoDate(query.to),

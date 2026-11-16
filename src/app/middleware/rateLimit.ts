@@ -93,3 +93,18 @@ export const uploadLimiter = rateLimit({
         message: "Too many uploads. Please wait a few minutes and try again.",
     },
 });
+
+/**
+ * Mailing a report. The body is the caller's own text sent from the platform's
+ * mail domain, so without a cap one account could use it as a relay. A few
+ * reports an hour is more than any owner sends.
+ */
+export const reportEmailLimiter = rateLimit({
+    ...sharedOptions,
+    windowMs: 60 * 60 * 1000,
+    limit: 10,
+    message: {
+        success: false,
+        message: "Too many report emails. Please wait a while and try again.",
+    },
+});

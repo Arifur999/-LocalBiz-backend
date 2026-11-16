@@ -21,7 +21,9 @@ type VerifyTokenResult = VerifyTokenSuccess | VerifyTokenFailure;
 
 const verifyToken = (token: string, secret: string): VerifyTokenResult => {
   try {
-    const decoded = jwt.verify(token, secret) as JwtPayload;
+    // Pinned to the one algorithm createToken signs with, so a token can never
+    // choose how it is verified.
+    const decoded = jwt.verify(token, secret, { algorithms: ['HS256'] }) as JwtPayload;
     return {
       success: true,
       decoded,

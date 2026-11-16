@@ -3,6 +3,7 @@ import { Role } from "../../../generated/prisma/enums.js";
 import { checkAuth } from "../../middleware/checkAuth.js";
 import { checkSubscription } from "../../middleware/checkSubscription.js";
 import { validateRequest } from "../../middleware/validateRequest.js";
+import { reportEmailLimiter } from "../../middleware/rateLimit.js";
 import { ReportController } from "./report.controller.js";
 import { emailReportZodSchema } from "./report.validation.js";
 import { requirePermission } from "../../middleware/requirePermission.js";
@@ -17,6 +18,7 @@ router.post(
     checkAuth(Role.owner, Role.manager, Role.accountant),
     checkSubscription,
     requirePermission(...READS.reports),
+    reportEmailLimiter,
     validateRequest(emailReportZodSchema),
     ReportController.emailReport
 );

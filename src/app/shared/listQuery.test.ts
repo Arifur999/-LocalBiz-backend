@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { dateRangeWhere, escapeLikeTerm, pageSlice, paginationMeta, parseListOptions } from "./listQuery.js";
+import { dateRangeWhere, escapeLikeTerm, MAX_PAGE_SIZE, pageSlice, paginationMeta, parseListOptions } from "./listQuery.js";
 
 // The frontend's queryEngine.test.ts pins down what a search means in the
 // browser. These pin down the server half, and the pair have to agree - a
@@ -83,6 +83,13 @@ describe("parseListOptions", () => {
             from: undefined,
             to: undefined,
         });
+    });
+});
+
+describe("page size cap", () => {
+    it("clamps an oversized limit instead of running one giant query", () => {
+        assert.equal(parseListOptions({ limit: "10000000" }).limit, MAX_PAGE_SIZE);
+        assert.equal(parseListOptions({ limit: "40" }).limit, 40);
     });
 });
 
