@@ -49,6 +49,13 @@ const updateTransfer = async (id: string, payload: IUpdateAccountTransferPayload
         throw new AppError(status.NOT_FOUND, "Transfer not found");
     }
 
+    // Same check as create: a PATCH could otherwise re-point either side at
+    // another workspace's account and move money through their balance.
+    await assertOwnedReferences(payload, user.ownerId, {
+        from_account_id: "account",
+        to_account_id: "account",
+    });
+
     // Either side may be left out of the payload, so check the values the row
     // would end up with, not just the ones that were sent.
     const from = payload.from_account_id ?? existing.from_account_id;

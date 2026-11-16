@@ -87,6 +87,10 @@ const updateExpense = async (id: string, payload: IUpdateExpensePayload, user: I
 
     await assertNotLoanOwned(id, user.ownerId);
     await assertNotDamageOwned(id, user.ownerId);
+    await assertOwnedReferences(payload, user.ownerId, {
+        account_id: "account",
+        category_id: "expenseCategory",
+    });
 
     return prisma.expense.update({
         where: { id },

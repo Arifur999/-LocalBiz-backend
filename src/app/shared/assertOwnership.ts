@@ -46,6 +46,7 @@ const REFERENCE_LOOKUPS = {
     loanLender: { label: "Bank / person", find: (id: string, ownerId: string) => prisma.loanLender.findFirst({ where: { id, owner_id: ownerId }, select: { id: true } }) },
     sale: { label: "Sale", find: (id: string, ownerId: string) => prisma.sale.findFirst({ where: { id, owner_id: ownerId }, select: { id: true } }) },
     purchase: { label: "Purchase", find: (id: string, ownerId: string) => prisma.purchase.findFirst({ where: { id, owner_id: ownerId }, select: { id: true } }) },
+    expense: { label: "Expense", find: (id: string, ownerId: string) => prisma.expense.findFirst({ where: { id, owner_id: ownerId }, select: { id: true } }) },
 } as const;
 
 export type OwnedReferenceKind = keyof typeof REFERENCE_LOOKUPS;

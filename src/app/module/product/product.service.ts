@@ -3,7 +3,7 @@ import AppError from "../../errorHelpers/AppError.js";
 import { IRequestUser } from "../../interfaces/requestUser.interface.js";
 import { prisma } from "../../lib/prisma.js";
 import { Prisma } from "../../../generated/prisma/client.js";
-import { assertOwnedRecord } from "../../shared/assertOwnership.js";
+import { assertOwnedRecord, assertOwnedReferences } from "../../shared/assertOwnership.js";
 import { openingBatchRepriceTo } from "../../shared/batchCost.js";
 import { escapeLikeTerm, pageSlice, type ListOptions } from "../../shared/listQuery.js";
 import { actualDp } from "../../shared/money.js";
@@ -213,6 +213,19 @@ const createProduct = async (payload: ICreateProductPayload, user: IRequestUser)
 
 // CSV import: upsert by product_code within the owner's workspace.
 const bulkUpsertProducts = async (payloads: ICreateProductPayload[], user: IRequestUser) => {
+    // One query for every distinct supplier in the file, checked before
+    // anything is written: a foreign supplier_id would link (and echo back)
+    // another workspace's supplier, exactly as on the single create.
+    const supplierIds = [...new Set(payloads.map((p) => p.supplier_id).filter((id): id is string => Boolean(id)))];
+    if (supplierIds.length > 0) {
+        const owned = await prisma.supplier.count({
+            where: { id: { in: supplierIds }, owner_id: user.ownerId },
+        });
+        if (owned !== supplierIds.length) {
+            throw new AppError(status.NOT_FOUND, "Supplier not found");
+        }
+    }
+
     const results = await prisma.$transaction(async (tx) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const saved: any[] = [];
@@ -382,6 +395,10 @@ const updateProduct = async (id: string, payload: IUpdateProductPayload, user: I
     if (!existing) {
         throw new AppError(status.NOT_FOUND, "Product not found");
     }
+
+    // Same check as create - the response includes the supplier, so a foreign
+    // supplier_id here would echo another workspace's supplier back.
+    await assertOwnedReferences(payload, user.ownerId, { supplier_id: "supplier" });
 
     const product = await prisma.$transaction(async (tx) => {
         const updated = await tx.product.update({

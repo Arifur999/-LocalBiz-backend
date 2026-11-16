@@ -2,6 +2,7 @@ import status from "http-status";
 import AppError from "../../errorHelpers/AppError.js";
 import { IRequestUser } from "../../interfaces/requestUser.interface.js";
 import { prisma } from "../../lib/prisma.js";
+import { assertOwnedReferences } from "../../shared/assertOwnership.js";
 import { dateRangeWhere, type ListOptions } from "../../shared/listQuery.js";
 import { ICreateSalePaymentPayload, IUpdateSalePaymentPayload } from "./salePayment.validation.js";
 
@@ -25,6 +26,11 @@ const createPayment = async (payload: ICreateSalePaymentPayload, user: IRequestU
         throw new AppError(status.NOT_FOUND, "Sale not found");
     }
 
+    await assertOwnedReferences(payload, user.ownerId, {
+        customer_id: "customer",
+        account_id: "account",
+    });
+
     return prisma.salePayment.create({
         data: {
             ...payload,
@@ -46,6 +52,14 @@ const updatePayment = async (id: string, payload: IUpdateSalePaymentPayload, use
     if (!existing) {
         throw new AppError(status.NOT_FOUND, "Sale payment not found");
     }
+
+    // A PATCH carrying another workspace's sale_id put this row on their
+    // sale's ledger and changed their paid/due figures.
+    await assertOwnedReferences(payload, user.ownerId, {
+        sale_id: "sale",
+        customer_id: "customer",
+        account_id: "account",
+    });
 
     return prisma.salePayment.update({
         where: { id },

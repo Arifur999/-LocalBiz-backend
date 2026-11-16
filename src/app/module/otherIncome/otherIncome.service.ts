@@ -65,6 +65,10 @@ const updateOtherIncome = async (id: string, payload: IUpdateOtherIncomePayload,
     }
 
     await assertNotLoanOwned(id, user.ownerId);
+    await assertOwnedReferences(payload, user.ownerId, {
+        account_id: "account",
+        supplier_id: "supplier",
+    });
 
     return prisma.otherIncome.update({
         where: { id },

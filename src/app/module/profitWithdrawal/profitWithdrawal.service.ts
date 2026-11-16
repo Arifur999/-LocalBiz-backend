@@ -43,6 +43,11 @@ const updateProfitWithdrawal = async (id: string, payload: IUpdateProfitWithdraw
         throw new AppError(status.NOT_FOUND, "Profit withdrawal not found");
     }
 
+    await assertOwnedReferences(payload, user.ownerId, {
+        account_id: "account",
+        shareholder_id: "shareholder",
+    });
+
     return prisma.profitWithdrawal.update({
         where: { id },
         data: {

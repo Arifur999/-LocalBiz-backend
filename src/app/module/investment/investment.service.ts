@@ -43,6 +43,11 @@ const updateInvestment = async (id: string, payload: IUpdateInvestmentPayload, u
         throw new AppError(status.NOT_FOUND, "Investment record not found");
     }
 
+    await assertOwnedReferences(payload, user.ownerId, {
+        account_id: "account",
+        shareholder_id: "shareholder",
+    });
+
     return prisma.investment.update({
         where: { id },
         data: {

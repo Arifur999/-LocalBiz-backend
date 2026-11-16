@@ -44,6 +44,12 @@ const updatePayment = async (id: string, payload: IUpdateSupplierPaymentPayload,
         throw new AppError(status.NOT_FOUND, "Supplier payment not found");
     }
 
+    await assertOwnedReferences(payload, user.ownerId, {
+        account_id: "account",
+        supplier_id: "supplier",
+        purchase_id: "purchase",
+    });
+
     return prisma.supplierPayment.update({
         where: { id },
         data: {

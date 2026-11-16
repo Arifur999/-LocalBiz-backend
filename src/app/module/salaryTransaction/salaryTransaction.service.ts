@@ -34,6 +34,7 @@ const createSalaryTransaction = async (
     await assertOwnedReferences(payload, user.ownerId, {
         account_id: "account",
         category_id: "expenseCategory",
+        expense_id: "expense",
     });
 
     const employee = await prisma.employee.findFirst({
@@ -94,6 +95,14 @@ const updateSalaryTransaction = async (id: string, payload: IUpdateSalaryTransac
     if (!existing) {
         throw new AppError(status.NOT_FOUND, "Salary transaction not found");
     }
+
+    // Same ids create checks, plus the employee create looks up by hand.
+    await assertOwnedReferences(payload, user.ownerId, {
+        account_id: "account",
+        category_id: "expenseCategory",
+        employee_id: "employee",
+        expense_id: "expense",
+    });
 
     return prisma.salaryTransaction.update({
         where: { id },
