@@ -1,6 +1,7 @@
 import { IRequestUser } from "../../interfaces/requestUser.interface.js";
 import { prisma } from "../../lib/prisma.js";
 import { roundTaka } from "../../shared/money.js";
+import { readableSources } from "./activityAccess.js";
 
 // ---------------------------------------------------------------------------
 // What was done on a given day.
@@ -40,42 +41,47 @@ const dayWindow = (day: string) => ({
 
 const num = (value: unknown) => roundTaka(value);
 
+// A source the caller may not read still runs its query, filtered to nothing -
+// it keeps every result's type intact for the merging code below.
+const gate = (allowed: boolean) => (allowed ? {} : { id: { in: [] as string[] } });
+
 const getDayActivity = async (day: string, user: IRequestUser) => {
     const created_at = dayWindow(day);
     const where = { owner_id: user.ownerId, created_at };
+    const readable = readableSources(user);
 
     const [sales, purchases, receives, expenses, customerPayments, supplierPayments, loans, otherIncome] =
         await Promise.all([
             prisma.sale.findMany({
-                where: { ...where, deleted_at: null, status: "completed" },
+                where: { ...where, ...gate(readable.sales), deleted_at: null, status: "completed" },
                 select: { created_at: true, invoice_no: true, customer_name: true, net_amount: true, paid_amount: true },
             }),
             prisma.purchase.findMany({
-                where: { ...where, deleted_at: null },
+                where: { ...where, ...gate(readable.purchases), deleted_at: null },
                 select: { created_at: true, si_no: true, supplier_name: true, net_amount: true },
             }),
             prisma.purchaseReceive.findMany({
-                where,
+                where: { ...where, ...gate(readable.purchases) },
                 select: {
                     created_at: true, received_qty: true, receiver_name: true,
                     purchase_item: { select: { product_name: true } },
                 },
             }),
             prisma.expense.findMany({
-                where,
+                where: { ...where, ...gate(readable.expenses) },
                 // id, so the loan rows below can disown the ones they wrote.
                 select: { id: true, created_at: true, category_name: true, notes: true, amount: true },
             }),
             prisma.customerPayment.findMany({
-                where,
+                where: { ...where, ...gate(readable.customerPayments) },
                 select: { created_at: true, customer_name: true, account_name: true, amount: true },
             }),
             prisma.supplierPayment.findMany({
-                where,
+                where: { ...where, ...gate(readable.supplierPayments) },
                 select: { created_at: true, supplier_name: true, account_name: true, amount: true },
             }),
             prisma.loan.findMany({
-                where,
+                where: { ...where, ...gate(readable.loans) },
                 select: {
                     created_at: true, lender_name: true, transaction_type: true,
                     received_amount: true, payment_amount: true,
@@ -84,7 +90,7 @@ const getDayActivity = async (day: string, user: IRequestUser) => {
                 },
             }),
             prisma.otherIncome.findMany({
-                where,
+                where: { ...where, ...gate(readable.otherIncomes) },
                 select: { id: true, created_at: true, source_name: true, supplier_name: true, amount: true },
             }),
         ]);

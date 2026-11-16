@@ -5,9 +5,9 @@ import { ActivityController } from "./activity.controller.js";
 
 const router = Router();
 
-// Read-only, and it shows nothing a signed-in user could not reach by opening
-// the eight pages it draws from - so no extra permission beyond being in the
-// workspace. Every query inside is scoped to the caller's owner_id.
+// Open to anyone in the workspace, but the service drops every source whose own
+// list route the caller could not open (activityAccess.ts), so the feed never
+// shows more than the pages it draws from. Every query is scoped to owner_id.
 router.get("/day", checkAuth(), checkSubscription, ActivityController.getDayActivity);
 
 export const ActivityRoutes = router;
