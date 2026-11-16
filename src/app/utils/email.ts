@@ -37,7 +37,7 @@ const isSmtpConfigured = () =>
     Boolean(env.EMAIL_SENDER.SMTP_USER && env.EMAIL_SENDER.SMTP_PASS);
 
 // Build the transporter lazily (once) so a missing config never crashes boot.
-let transporter: nodemailer.Transporter | null = null;
+let transporter: ReturnType<typeof nodemailer.createTransport> | null = null;
 
 const getTransporter = () => {
     if (!transporter) {
