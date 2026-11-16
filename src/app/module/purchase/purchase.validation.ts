@@ -1,5 +1,5 @@
 import z from "zod";
-import { ShippingStatus, ReceiveCondition } from "../../../generated/prisma/enums.js";
+import { ReceiveCondition } from "../../../generated/prisma/enums.js";
 
 const purchaseItemZodSchema = z.object({
     product_id: z.uuid("Product id must be a valid UUID"),
@@ -25,9 +25,13 @@ export const createPurchaseZodSchema = z.object({
     net_amount: z.number("Net amount must be a number").nonnegative().optional(),
     paid_amount: z.number("Paid amount must be a number").nonnegative().optional(),
     due_amount: z.number("Due amount must be a number").optional(),
-    shipping_status: z.enum([ShippingStatus.pending, ShippingStatus.partial, ShippingStatus.received], "Invalid shipping status").optional(),
     notes: z.string("Notes must be string").optional(),
-    items: z.array(purchaseItemZodSchema).min(1, "At least one item is required"),
+    // Lines arrive unreceived: received_qty is dropped here, and receiving goes
+    // through the receive endpoints that add stock and lay down the FIFO batch.
+    // shipping_status is not accepted either - the server derives it from the
+    // lines (refreshShippingStatus), so a caller cannot mark an order received
+    // with nothing behind it.
+    items: z.array(purchaseItemZodSchema.omit({ received_qty: true })).min(1, "At least one item is required"),
 });
 
 /**
@@ -49,7 +53,6 @@ export const updatePurchaseZodSchema = z.object({
     net_amount: z.number("Net amount must be a number").optional(),
     paid_amount: z.number("Paid amount must be a number").optional(),
     due_amount: z.number("Due amount must be a number").optional(),
-    shipping_status: z.enum([ShippingStatus.pending, ShippingStatus.partial, ShippingStatus.received], "Invalid shipping status").optional(),
     notes: z.string("Notes must be string").optional(),
 });
 

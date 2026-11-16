@@ -97,7 +97,7 @@ const createPurchase = async (payload: ICreatePurchasePayload, user: IRequestUse
                 ...item,
                 owner_id: user.ownerId,
                 purchase_id: purchase.id,
-                received_qty: item.received_qty ?? 0,
+                received_qty: 0,
             })),
         });
 
@@ -117,13 +117,19 @@ const updatePurchase = async (id: string, payload: IUpdatePurchasePayload, user:
         throw new AppError(status.NOT_FOUND, "Purchase not found");
     }
 
-    return prisma.purchase.update({
-        where: { id },
-        data: {
-            ...payload,
-            date: payload.date ? new Date(payload.date) : undefined,
-        },
-        include: purchaseInclude,
+    await assertOwnedReferences(payload, user.ownerId, { supplier_id: "supplier" });
+
+    // shipping_status is no longer taken from the body; re-deriving it here
+    // keeps the answer the edit screen used to send, from the lines themselves.
+    return prisma.$transaction(async (tx) => {
+        await tx.purchase.update({
+            where: { id },
+            data: {
+                ...payload,
+                date: payload.date ? new Date(payload.date) : undefined,
+            },
+        });
+        return refreshShippingStatus(tx, id);
     });
 };
 
