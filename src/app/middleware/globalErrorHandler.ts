@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import status from "http-status";
+import multer from "multer";
 import z from "zod";
 import { env } from "../../config/env.js";
 import { Prisma } from "../../generated/prisma/client.js";
@@ -19,6 +20,14 @@ import { IError, IErrorResponse } from "../interfaces/error.interfaces.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const isExpectedAuthError = (err: any) =>
     err instanceof AppError && (err.statusCode === status.UNAUTHORIZED || err.statusCode === status.FORBIDDEN);
+
+const isProduction = env.NODE_ENV === "production";
+
+/** An http-errors style 4xx whose message is safe to show (`expose`). */
+const isClientHttpError = (err: Error): err is Error & { status: number } => {
+    const e = err as Error & { status?: unknown; expose?: unknown };
+    return typeof e.status === "number" && e.status >= 400 && e.status < 500 && e.expose === true;
+};
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unused-vars
 export const globalErrorHandler = async (err: any, req: Request, res: Response, next: NextFunction) => {
@@ -76,11 +85,32 @@ export const globalErrorHandler = async (err: any, req: Request, res: Response, 
         message = err.message;
         stack = err.stack;
         errorSource = [{ path: "", message: err.message }];
-    } else if (err instanceof Error) {
-        statusCode = status.INTERNAL_SERVER_ERROR;
+    } else if (err instanceof multer.MulterError) {
+        // File too large, too many files, unexpected field: the caller's mistake.
+        statusCode = status.BAD_REQUEST;
+        message = err.message;
+        stack = err.stack;
+        errorSource = [{ path: err.field ?? "", message: err.message }];
+    } else if (err instanceof Error && isClientHttpError(err)) {
+        // body-parser and friends throw http-errors with a 4xx status and a
+        // message written for the client (malformed JSON, body too large).
+        statusCode = err.status;
         message = err.message;
         stack = err.stack;
         errorSource = [{ path: "", message: err.message }];
+    } else if (err instanceof Error) {
+        statusCode = status.INTERNAL_SERVER_ERROR;
+        // An unexpected error's own message can carry internals (SQL, file
+        // paths, upstream responses), so production answers generically and
+        // keeps the detail for the server log.
+        message = isProduction ? "Internal Server Error" : err.message;
+        stack = err.stack;
+        errorSource = [{ path: "", message }];
+    }
+
+    // Production printed nothing at all, so a 500 left no trace anywhere.
+    if (isProduction && statusCode >= 500) {
+        console.error(`[error] ${req.method} ${req.originalUrl} -> ${statusCode}:`, err);
     }
 
     const errorResponse: IErrorResponse = {

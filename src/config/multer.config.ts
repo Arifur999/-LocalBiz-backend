@@ -1,4 +1,6 @@
+import status from "http-status";
 import multer from "multer";
+import AppError from "../app/errorHelpers/AppError.js";
 import { CloudinaryStorage } from "multer-storage-cloudinary";
 import { cloudinaryUpload } from "./cloudinary.config.js";
 
@@ -40,7 +42,8 @@ export const multerUpload = multer({
     },
     fileFilter: (_req, file, callback) => {
         if (!ALLOWED_IMAGE_TYPES.has(file.mimetype)) {
-            callback(new Error(`Only JPG, PNG, WebP and GIF images are allowed (received ${file.mimetype})`));
+            // AppError so it answers 400 - a plain Error is a 500 to the handler.
+            callback(new AppError(status.BAD_REQUEST, "Only JPG, PNG, WebP and GIF images are allowed"));
             return;
         }
         callback(null, true);
