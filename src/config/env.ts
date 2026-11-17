@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import { parseReviewEmails } from "../app/shared/loginOtp.js";
+import { weakSecretProblems } from "./secretStrength.js";
 
 dotenv.config();
 
@@ -85,6 +86,16 @@ requiredEnvVars.forEach((varName) => {
         throw new Error(`Environment variable ${varName} is not set`);
     }
 });
+
+// Being set is not enough in production: an example or guessable token secret
+// lets anyone sign their own super-admin token. Development is left alone so a
+// throwaway .env still starts.
+if (process.env.NODE_ENV === "production") {
+    const problems = weakSecretProblems(process.env);
+    if (problems.length > 0) {
+        throw new Error(`Refusing to start with weak secrets:\n  - ${problems.join("\n  - ")}`);
+    }
+}
 
 export const env: ENVConfig = {
     NODE_ENV: process.env.NODE_ENV || "development",

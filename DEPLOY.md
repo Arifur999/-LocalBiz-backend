@@ -64,9 +64,12 @@ POSTGRES_DB=localbiz
 # Host is the compose service name, NOT localhost, and must match the three above.
 DATABASE_URL=postgresql://localbiz:<same password>@postgres:5432/localbiz
 
+# Each from `openssl rand -hex 32`. The server will not start in production on
+# a placeholder, on fewer than 32 characters, or on the same value twice.
 ACCESS_TOKEN_SECRET=<long random string>
 REFRESH_TOKEN_SECRET=<a different long random string>
 SUPER_ADMIN_EMAIL=you@example.com
+# At least 12 characters, or the server will not start.
 SUPER_ADMIN_PASSWORD=<your password>
 
 FRONTEND_URL=https://your-domain.com
