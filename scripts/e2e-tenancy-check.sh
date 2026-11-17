@@ -19,6 +19,7 @@ cleanup() {
   sql "delete from account_transfers where owner_id in ($owners)" >/dev/null
   sql "delete from accounts where owner_id in ($owners)" >/dev/null
   sql "delete from admin_activities where owner_id in ($owners)" >/dev/null
+  sql "delete from otps where email like 'e2e-%@localbiz.test'" >/dev/null
   sql "delete from users where email like 'e2e-%@localbiz.test'" >/dev/null
   rm -f "$JAR_A" "$JAR_B"
 }

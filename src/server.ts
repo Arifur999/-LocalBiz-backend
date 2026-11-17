@@ -1,6 +1,7 @@
 import { Server } from "http";
 import app from "./app.js";
 import { seedSuperAdmin } from "./app/utils/seed.js";
+import { syncRevokedSessions } from "./app/utils/sessionRevocation.js";
 import { mailProviderSummary } from "./app/utils/email.js";
 import { env } from "./config/env.js";
 
@@ -9,6 +10,9 @@ let server: Server;
 const bootstrap = async () => {
     try {
         await seedSuperAdmin();
+        // Before the first request is served: a session signed out before a
+        // restart must still be refused after it.
+        await syncRevokedSessions();
         server = app.listen(env.PORT, () => {
             console.log(`Server is running on http://localhost:${env.PORT}`);
             // Which mail credentials won the resolution order in utils/email.ts.

@@ -176,6 +176,25 @@ const refreshToken = catchAsync(async (req: Request, res: Response) => {
 });
 
 const logoutUser = catchAsync(async (req: Request, res: Response) => {
+    // End the session on the server, not only in this browser: without this a
+    // token copied beforehand outlived the sign-out (see AuthService.endSession).
+    //
+    // The website's tokens are in its cookies; the app sends its refresh token
+    // in the body and its access token as a Bearer header.
+    const bearer = req.headers.authorization?.startsWith("Bearer ")
+        ? req.headers.authorization.slice(7)
+        : undefined;
+    try {
+        await AuthService.endSession({
+            refreshToken: isMobileClient(req) ? mobileRefreshToken(req) : cookieUtils.getCookie(req, "lb_refreshToken"),
+            accessToken: cookieUtils.getCookie(req, "lb_accessToken") || bearer,
+        });
+    } catch (error) {
+        // Signing out must always succeed for the person doing it. If the
+        // revocation could not be written, the cookies are still cleared.
+        console.error("[auth] Could not end the session on the server:", error);
+    }
+
     cookieUtils.clearAuthCookies(res);
 
     sendResponse(res, {

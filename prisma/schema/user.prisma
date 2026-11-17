@@ -198,6 +198,22 @@ model Otp {
   @@map("otps")
 }
 
+// Sessions ended by signing out. Tokens are stateless JWTs, so "this session is
+// over" has to be written down somewhere: each login gets a session id (the
+// `sid` claim), and signing out records it here. A row only needs to live until
+// the session would have ended anyway (expires_at), then the hourly sweep
+// removes it. No relation to users on purpose - deleting a user must not be
+// able to un-revoke anything.
+model RevokedSession {
+  sid        String   @id
+  user_id    String
+  expires_at DateTime
+  created_at DateTime @default(now())
+
+  @@index([expires_at])
+  @@map("revoked_sessions")
+}
+
 // Server-backed recycle bin (was localStorage before). Pages push a snapshot
 // of the deleted record here; restore re-inserts the JSON into its table.
 model RecycleBinItem {

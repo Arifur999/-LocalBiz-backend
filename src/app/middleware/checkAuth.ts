@@ -7,6 +7,7 @@ import { prisma } from "../lib/prisma.js";
 import { getCachedUser, setCachedUser } from "../utils/authCache.js";
 import { cookieUtils } from "../utils/cookie.js";
 import { jwtUtils } from "../utils/jwt.js";
+import { SIGNED_OUT_MESSAGE, isSessionRevokedLocally } from "../utils/sessionRevocation.js";
 
 export const checkAuth = (...authRoles: Role[]) => async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -24,6 +25,12 @@ export const checkAuth = (...authRoles: Role[]) => async (req: Request, res: Res
 
         if (!verifiedToken.success) {
             throw new AppError(status.UNAUTHORIZED, "Unauthorized access! Invalid access token.");
+        }
+
+        // Signed out on this session: the token is genuine and unexpired, but
+        // the person it was issued to has ended it. A memory lookup, no query.
+        if (isSessionRevokedLocally(verifiedToken.decoded.sid)) {
+            throw new AppError(status.UNAUTHORIZED, SIGNED_OUT_MESSAGE);
         }
 
         const { userId } = verifiedToken.decoded;

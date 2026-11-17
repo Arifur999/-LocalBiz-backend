@@ -20,6 +20,9 @@ const OTP_TTL_MINUTES = 2;
 const MAX_ATTEMPTS = 5;
 const RESEND_COOLDOWN_SECONDS = 60;
 
+/** What a wrong code answers once its attempts are spent; also used when a code matched but no account exists. */
+export const WRONG_CODE_MESSAGE = "Wrong code. Please request a new one.";
+
 export const OTP_PURPOSE_VERIFY_EMAIL = "verify_email";
 export const OTP_PURPOSE_RESET_PASSWORD = "reset_password";
 
@@ -34,7 +37,13 @@ const generateOtpCode = () => String(randomInt(100000, 1000000));
 
 // Issue (or re-issue) an OTP for the given email and send it out.
 // Deletes any previous codes for the same purpose so only one is ever valid.
-export const issueOtp = async (email: string, name: string, purpose = OTP_PURPOSE_VERIFY_EMAIL) => {
+//
+// `deliver: false` does everything except send the mail. It is for an address
+// with no account behind it: the row it leaves makes the verify step answer
+// exactly as it would for a real account (wrong code, attempts left, expiry),
+// so neither step tells a caller whether the email is registered. Nobody is
+// ever told the code, and a correct guess still finds no user to act on.
+export const issueOtp = async (email: string, name: string, purpose = OTP_PURPOSE_VERIFY_EMAIL, deliver = true) => {
     const code = generateOtpCode();
     const codeHash = await bcrypt.hash(code, 8);
 
@@ -60,12 +69,12 @@ export const issueOtp = async (email: string, name: string, purpose = OTP_PURPOS
     // registration/login/resend request that triggered this. sendOtpEmail()
     // catches every error internally and always resolves (never rejects),
     // so there's no unhandled-rejection risk in not awaiting it here.
-    void sendOtpEmail(email, name, code);
+    if (deliver) void sendOtpEmail(email, name, code);
 };
 
 // Re-send a code, enforcing the 60s cooldown. If the previous code already
 // expired we issue a brand new one instead of resending the dead hash.
-export const resendOtp = async (email: string, name: string, purpose = OTP_PURPOSE_VERIFY_EMAIL) => {
+export const resendOtp = async (email: string, name: string, purpose = OTP_PURPOSE_VERIFY_EMAIL, deliver = true) => {
     const existing = await prisma.otp.findFirst({
         where: { email, purpose },
         orderBy: { created_at: "desc" },
@@ -84,7 +93,7 @@ export const resendOtp = async (email: string, name: string, purpose = OTP_PURPO
 
     // A resend always mints a fresh code - simpler and strictly safer than
     // re-mailing the old one (we don't have the raw code anyway, only a hash).
-    await issueOtp(email, name, purpose);
+    await issueOtp(email, name, purpose, deliver);
 };
 
 // Verify a submitted code. Throws a descriptive AppError on every failure
@@ -122,12 +131,18 @@ export const verifyOtp = async (email: string, code: string, purpose = OTP_PURPO
             status.BAD_REQUEST,
             remaining > 0
                 ? `Wrong code. ${remaining} attempt${remaining === 1 ? "" : "s"} left.`
-                : "Wrong code. Please request a new one."
+                : WRONG_CODE_MESSAGE
         );
     }
 
     // Success: the code is single-use, remove it immediately.
     await prisma.otp.delete({ where: { id: otpRow.id } });
 };
+
+// Rows are normally removed when they are used or replaced, but one that is
+// simply abandoned (or left for an address with no account) would stay
+// forever. Called from the hourly sweep in app.ts.
+export const purgeExpiredOtps = () =>
+    prisma.otp.deleteMany({ where: { expires_at: { lt: new Date(Date.now() - 60 * 60 * 1000) } } });
 
 export const otpUtils = { issueOtp, resendOtp, verifyOtp };
