@@ -2,13 +2,21 @@
 # --legacy-peer-deps: multer-storage-cloudinary@4 declares a peer on
 # cloudinary@^1.21, but this project uses cloudinary@2.x - same workaround
 # used for local installs throughout this project.
-FROM node:22-alpine AS deps
+# The base image is pinned by digest (Node 22.23.5 on Alpine, looked up
+# 2026-11-17) so the same commit always builds the same image - a tag can be
+# moved to different contents without anything here changing. The cost is that
+# security updates to the base no longer arrive on their own: refresh the digest
+# on all three FROM lines now and then with
+#
+#   docker buildx imagetools inspect node:22-alpine
+#
+FROM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS deps
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --legacy-peer-deps
 
 # ---- build: generate the Prisma client (TS source, compiled below), then compile TypeScript ----
-FROM node:22-alpine AS build
+FROM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -16,7 +24,7 @@ RUN npx prisma generate
 RUN npm run build
 
 # ---- runtime: production deps only + compiled output ----
-FROM node:22-alpine AS runtime
+FROM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
