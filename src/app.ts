@@ -1,11 +1,15 @@
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express, { Application, Request, Response } from "express";
+import helmet from "helmet";
 import cron from "node-cron";
 import { prisma } from "./app/lib/prisma.js";
 import { globalErrorHandler } from "./app/middleware/globalErrorHandler.js";
 import notFound from "./app/middleware/notFound.js";
+import { apiLimiter } from "./app/middleware/rateLimit.js";
 import { indexRoute } from "./app/routes/index.js";
+import { purgeExpiredOtps } from "./app/utils/otp.js";
+import { purgeExpiredRevocations, syncRevokedSessions } from "./app/utils/sessionRevocation.js";
 import { sendExpiryReminders } from "./app/utils/subscriptionReminders.js";
 import { env } from "./config/env.js";
 
@@ -32,6 +36,28 @@ cron.schedule("0 * * * *", async () => {
     } catch (error: any) {
         console.error("Subscription expiry sweep failed:", error.message);
     }
+
+    // Housekeeping for the two auth tables that only ever grow otherwise:
+    // sign-outs whose session has ended, and codes nobody came back to use.
+    try {
+        await purgeExpiredRevocations();
+        await purgeExpiredOtps();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (error: any) {
+        console.error("Auth table cleanup failed:", error.message);
+    }
+});
+
+// Every minute: pick up sign-outs recorded by another instance (and drop the
+// ones that no longer matter). This process already knows its own at once, so
+// with the single backend the compose file runs this only confirms the table.
+cron.schedule("* * * * *", async () => {
+    try {
+        await syncRevokedSessions();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (error: any) {
+        console.error("Revoked-session sync failed:", error.message);
+    }
 });
 
 // Daily at 9am: email owners whose subscription expires in exactly 15, 7 or
@@ -51,6 +77,15 @@ cron.schedule("0 9 * * *", async () => {
 // users in one rate-limit bucket and let a single attacker lock out everybody.
 // 1 = trust exactly one proxy hop, which is what the compose stack has.
 app.set("trust proxy", 1);
+
+// The API's own response headers (nosniff, no framing, no X-Powered-By ...).
+// nginx sets these for the site as a whole, but only when a request comes
+// through it; this covers the API whichever way it is reached.
+//
+// HSTS is left to nginx on purpose: helmet's default adds includeSubDomains,
+// which would force HTTPS on every other subdomain of the site's domain - a
+// decision for whoever owns the domain, not for this file.
+app.use(helmet({ strictTransportSecurity: false }));
 
 // FRONTEND_URL may be a single origin or a comma-separated list (e.g. both
 // the www and bare-domain variants of a site: FRONTEND_URL=
@@ -94,9 +129,14 @@ app.use(cors({
     allowedHeaders: ["Content-Type", "Authorization"],
 }));
 
+// Cookies are parsed first because the limiter below keys on the signed-in
+// user, and it sits ahead of the body parsers so a caller over the ceiling is
+// turned away before a 2 MB body is read for them.
+app.use(cookieParser());
+app.use("/api/v1", apiLimiter);
+
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
-app.use(cookieParser());
 
 app.use("/api/v1", indexRoute);
 

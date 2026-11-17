@@ -1,5 +1,8 @@
-import rateLimit, { type Options } from "express-rate-limit";
+import type { Request } from "express";
+import rateLimit, { ipKeyGenerator, type Options } from "express-rate-limit";
 import status from "http-status";
+import { env } from "../../config/env.js";
+import { jwtUtils } from "../utils/jwt.js";
 
 // Throttles for the unauthenticated auth endpoints.
 //
@@ -106,5 +109,47 @@ export const reportEmailLimiter = rateLimit({
     message: {
         success: false,
         message: "Too many report emails. Please wait a while and try again.",
+    },
+});
+
+/**
+ * A ceiling on everything under /api/v1, for whoever is calling.
+ *
+ * The limiters above cover signing in, uploading and mailing. Nothing covered
+ * the rest, so one account - or one address - could call any other endpoint as
+ * fast as the network allowed. This is a backstop, not a throttle: a page load
+ * here is a few dozen requests, and the ceiling is far above anything a person
+ * (or a shop full of people on one login) does in a minute.
+ *
+ * Keyed by the signed-in user where there is one, and only then by address.
+ * Shops here often sit behind one carrier-grade NAT address shared with
+ * strangers; counting them together would let somebody else's traffic lock a
+ * customer out. The token is verified, not just decoded, so nobody can pick
+ * their own bucket.
+ */
+const callerKey = (req: Request): string => {
+    const token =
+        req.cookies?.lb_accessToken ||
+        (req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : undefined);
+
+    if (typeof token === "string" && token !== "") {
+        const verified = jwtUtils.verifyToken(token, env.ACCESS_TOKEN_SECRET);
+        if (verified.success && typeof verified.decoded.userId === "string") {
+            return `user:${verified.decoded.userId}`;
+        }
+    }
+    return `ip:${ipKeyGenerator(req.ip ?? "")}`;
+};
+
+export const API_REQUESTS_PER_MINUTE = 1500;
+
+export const apiLimiter = rateLimit({
+    ...sharedOptions,
+    windowMs: 60 * 1000,
+    limit: API_REQUESTS_PER_MINUTE,
+    keyGenerator: callerKey,
+    message: {
+        success: false,
+        message: "Too many requests. Please wait a moment and try again.",
     },
 });
