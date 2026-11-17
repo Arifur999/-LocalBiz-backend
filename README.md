@@ -39,3 +39,15 @@ npm run dev            # start dev server on :5100
 ```
 
 The super admin account is seeded automatically on boot from `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD`.
+
+### Writing a new migration: read the SQL before you keep it
+
+`npm run migrate` (`prisma migrate dev`) compares the schema files with the database, and the database has things the schema files cannot describe: the trigram and composite indexes from `20260808120000_list_performance_indexes` and the loan migrations, and three `DATE` columns that default to `CURRENT_DATE`. Prisma reads those as drift, so **every generated migration starts with `DROP INDEX` lines for them and three `ALTER COLUMN ... SET DEFAULT CURRENT_TIMESTAMP` lines** - and `migrate dev` applies the file to your database as it writes it.
+
+After generating one:
+
+1. Open the new `migration.sql` and delete everything that is not your change (see `20261117024213_revoked_sessions` for a trimmed example).
+2. If it already ran against your local database, put the indexes and defaults back (the `CREATE INDEX IF NOT EXISTS` statements are in the migrations named above), then re-record the file:
+   `delete from _prisma_migrations where migration_name = '<name>'`, followed by `npx prisma migrate resolve --applied <name>`.
+
+`npx prisma migrate dev --create-only --name <name>` writes the file without applying it, which avoids step 2.
